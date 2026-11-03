@@ -1,0 +1,65 @@
+---
+# Parse/check tier: the role runs with render_only (no cluster to read, nothing written) against a
+# good declaration and then against each bad one. The REAL role is called every time, so a
+# regression in a gate or a template fails here rather than on the cluster.
+- name: Converge
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _base_ipsets:
+      management: [{cidr: 192.0.2.10, comment: node}, {cidr: 198.51.100.0/24, comment: controller}]
+      proxy: [{cidr: 192.0.2.20, comment: traefik}]
+    _base_guest:
+      name: g1
+      vmid: 100
+      node: pve1
+      type: lxc
+      rules:
+        - {dir: in, proto: tcp, dport: "22", source: +management, comment: ssh}
+        - {dir: in, proto: tcp, dport: "8080", source: +proxy, comment: api}
+        - {dir: out, action: DROP, dest: 203.0.113.0/24, comment: no lateral}
+    _nodes: [{name: pve1, address: 192.0.2.10}]
+    # Each bad case: what to override, and the gate whose message must appear.
+    _bad_cases:
+      - name: apply without its second key
+        vars: {proxmox_guest_firewall_action: apply}
+        expect: needs both keys
+      - name: datacenter left disabled
+        vars: {proxmox_guest_firewall_cluster_options: {enable: 0, policy_in: ACCEPT, policy_out: ACCEPT}}
+        expect: inert
+      - name: datacenter policy DROP
+        vars: {proxmox_guest_firewall_cluster_options: {enable: 1, policy_in: DROP, policy_out: ACCEPT}}
+        expect: must be ACCEPT
+      - name: hostname in an IPSet
+        vars: {proxmox_guest_firewall_ipsets: {management: [{cidr: controller.example, comment: x}], proxy: [{cidr: 192.0.2.20, comment: t}]}}
+        expect: not an IP or CIDR
+      - name: rule without a comment
+        guest: {rules: [{dir: in, proto: tcp, dport: "22", source: +management}]}
+        expect: comment
+      - name: rule naming an undeclared ipset
+        guest: {rules: [{dir: in, proto: tcp, dport: "22", source: +management, comment: ssh}, {dir: in, source: +nope, comment: x}]}
+        expect: declared ipset
+      - name: DROP guest with no ssh rule
+        guest: {rules: [{dir: in, proto: tcp, dport: "8080", source: +proxy, comment: api}]}
+        expect: lock Ansible out
+      - name: unknown guest type
+        guest: {type: docker}
+        expect: type lxc|qemu
+  tasks:
+    - name: Render the good declaration
+      ansible.builtin.include_role:
+        name: proxmox_guest_firewall
+      vars:
+        proxmox_guest_firewall_action: preview
+        proxmox_guest_firewall_render_only: true
+        proxmox_guest_firewall_fw_dir: /nonexistent-molecule
+        proxmox_guest_firewall_nodes: "{{ _nodes }}"
+        proxmox_guest_firewall_ipsets: "{{ _base_ipsets }}"
+        proxmox_guest_firewall_guests: ["{{ _base_guest }}"]
+
+    - name: Run each bad case and record the failure message
+      ansible.builtin.include_tasks: bad_case.yml
+      loop: "{{ _bad_cases }}"
+      loop_control:
+        loop_var: _case
+        label: "{{ _case.name }}"

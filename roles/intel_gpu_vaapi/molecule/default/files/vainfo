@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Fake vainfo reproducing the Arc's failure mode, and a working iGPU on renderD128.
+# The distinction matters: a role that probed the wrong node would see success and report the Arc
+# as fine.
+if [[ "$*" == *"renderD129"* ]]; then
+  echo 'libva info: VA-API version 1.17.0'
+  echo 'libva info: Trying to open /usr/lib/x86_64-linux-gnu/dri/xe_drv_video.so'
+  echo 'libva info: va_openDriver() returns -1'
+  echo 'vaInitialize failed with error code -1 (unknown libva error),exit'
+  exit 1
+fi
+echo 'libva info: VA-API version 1.17.0'
+echo '      VAProfileH264High               : VAEntrypointVLD'
+echo '      VAProfileHEVCMain               : VAEntrypointVLD'
+exit 0

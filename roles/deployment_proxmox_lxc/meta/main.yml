@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  namespace: richard_lynch
+  author: Richard Lynch
+  description: >-
+    Create or converge one Proxmox VE LXC container through the API from a declared config dict:
+    create it if absent, update only the declared keys that drifted, start or restart it, then wait
+    for an inventory address and an SSH connection.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  galaxy_tags: [proxmox, lxc, container, virtualization]
+dependencies: []

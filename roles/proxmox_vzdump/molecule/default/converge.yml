@@ -1,0 +1,85 @@
+---
+# Exercise the REAL role's job-match + needs-update decisions offline, with no live cluster.
+#
+# WHY A FAKE `pvesh` RATHER THAN MIRRORED FACTS: this scenario used to re-type the role's own
+# selectattr chain and needs-update expression into converge/verify and assert the copy against
+# itself — a tautology that stays green through any regression in tasks/main.yml, so a role that
+# silently backs up nothing would still pass. Stubbing the two read-only `pvesh get` calls is the smallest
+# seam that lets the genuine task file run and be judged on what it actually decides.
+- name: Converge
+  hosts: localhost
+  gather_facts: true
+  vars:
+    proxmox_vzdump_job_tag: "ansible-managed-nightly"
+    proxmox_vzdump_storage: "local"
+    proxmox_vzdump_schedule: "02:45"
+    proxmox_vzdump_mode: "snapshot"
+    proxmox_vzdump_compress: "zstd"
+    proxmox_vzdump_all: true
+    proxmox_vzdump_enabled: true
+
+    # Each case: what `pvesh get /cluster/backup` returns, and what the role must then decide.
+    vzdump_cases:
+      - name: "A — our job present and in sync"
+        jobs:
+          - {id: "backup-aaa", comment: "someone elses job", storage: "local", schedule: "01:00"}
+          - {id: "backup-bbb", comment: "ansible-managed-nightly (managed by proxmox_vzdump)",
+             storage: "local", schedule: "02:45", mode: "snapshot", compress: "zstd",
+             all: 1, enabled: 1, prune-backups: "keep-daily=3,keep-monthly=1,keep-weekly=2"}
+        expect_id: "backup-bbb"       # ours, not the stranger's
+        expect_needs_update: false    # in sync → no pvesh set
+      - name: "B — our job present but the schedule drifted"
+        jobs:
+          - {id: "backup-bbb", comment: "ansible-managed-nightly (managed by proxmox_vzdump)",
+             storage: "local", schedule: "23:00", mode: "snapshot", compress: "zstd",
+             all: 1, enabled: 1, prune-backups: "keep-daily=3,keep-monthly=1,keep-weekly=2"}
+        expect_id: "backup-bbb"
+        expect_needs_update: true     # drift → pvesh set
+      - name: "C — no managed job present"
+        jobs:
+          - {id: "backup-aaa", comment: "someone elses job", storage: "local"}
+        expect_id: ""                 # no match → create path
+        expect_needs_update: false
+      # D/E/F are the retention cases: a changed proxmox_vzdump_keep_* must reach an existing job,
+      # in either of the two forms PVE returns the policy in.
+      - name: "D — only the retention drifted (property-string form)"
+        jobs:
+          - {id: "backup-bbb", comment: "ansible-managed-nightly (managed by proxmox_vzdump)",
+             storage: "local", schedule: "02:45", mode: "snapshot", compress: "zstd",
+             all: 1, enabled: 1, prune-backups: "keep-daily=7,keep-monthly=1,keep-weekly=2"}
+        expect_id: "backup-bbb"
+        expect_needs_update: true
+      - name: "E — retention in sync, returned as a mapping"
+        jobs:
+          - {id: "backup-bbb", comment: "ansible-managed-nightly (managed by proxmox_vzdump)",
+             storage: "local", schedule: "02:45", mode: "snapshot", compress: "zstd",
+             all: 1, enabled: 1, prune-backups: {keep-weekly: 2, keep-daily: 3, keep-monthly: 1}}
+        expect_id: "backup-bbb"
+        expect_needs_update: false
+      - name: "F — the job carries no prune-backups at all"
+        jobs:
+          - {id: "backup-bbb", comment: "ansible-managed-nightly (managed by proxmox_vzdump)",
+             storage: "local", schedule: "02:45", mode: "snapshot", compress: "zstd",
+             all: 1, enabled: 1}
+        expect_id: "backup-bbb"
+        expect_needs_update: true
+
+  # The fake `pvesh` must win over any real one for every task in this play, include_role
+  # included — `environment:` is not a valid attribute on include_role itself.
+  environment:
+    PATH: "{{ molecule_ephemeral_directory | default('/tmp') }}/fakebin:{{ ansible_env.PATH }}"
+
+  tasks:
+    - name: Create a directory for the fake pvesh
+      ansible.builtin.file:
+        path: "{{ molecule_ephemeral_directory | default('/tmp') }}/fakebin"
+        state: directory
+        mode: "0755"
+      register: _fakebin
+
+    - name: Run the REAL role once per case, with only `pvesh` stubbed
+      ansible.builtin.include_tasks: _run_case.yml
+      loop: "{{ vzdump_cases }}"
+      loop_control:
+        loop_var: case
+        label: "{{ case.name }}"

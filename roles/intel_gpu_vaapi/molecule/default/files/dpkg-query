@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Fake dpkg-query: bookworm's libva 2.17 (no xe backend), media driver absent.
+case "$*" in
+  *libva2*)                       echo -n "2.17.0-1" ;;
+  *intel-media-va-driver-non-free*) exit 1 ;;
+  *intel-media-va-driver*)        exit 1 ;;
+esac
+exit 0

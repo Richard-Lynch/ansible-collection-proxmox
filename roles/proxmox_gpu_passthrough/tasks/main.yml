@@ -1,0 +1,489 @@
+---
+# Frees a GPU from vfio-pci on a Proxmox host so the host's own driver (xe/i915/amdgpu) can bind it,
+# by adding an ACS override to the kernel cmdline. Generate-don't-apply: reports a diff unless
+# gpu_passthrough_apply=true.
+#
+# See roles/proxmox_gpu_passthrough/README.md for the full reasoning and the rollback procedure.
+
+- name: Setup vars
+  ansible.builtin.include_tasks: setup_vars.yml
+
+# --- 0. preconditions ----------------------------------------------------------------------------
+- name: HARD GATE — facts must be gathered
+  # ansible_date_time (used for the backup filename) is a GATHERED fact. Under gather_facts:false it
+  # is simply absent, the `| default('nodate')` in vars/main.yml silently takes over, and every run
+  # then writes to the SAME backup path — so a second apply would overwrite the only copy of the
+  # original cmdline with an already-modified one, quietly destroying the rollback path. Asserted
+  # rather than defaulted, because a rollback that restores the wrong content is worse than a stop.
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['date_time'] is defined
+      - _gpu_backup_stamp != 'nodate'
+    fail_msg: >-
+      This role needs gather_facts: true (ansible_facts.date_time is used to make the cmdline backup
+      filename unique). Without it every run would reuse one backup path and overwrite the
+      original cmdline.
+    success_msg: "Facts gathered; backup stamp is {{ _gpu_backup_stamp }}."
+    quiet: true
+
+# --- 1. establish the facts this role refuses to guess about ------------------------------------
+- name: Read the RUNNING kernel cmdline
+  # /proc/cmdline is what the host actually booted with, as distinct from the on-disk file it will
+  # boot with NEXT time. Comparing the two is what detects "the change was applied but the host has
+  # not been rebooted yet" — otherwise a re-run looks like a no-op and an operator can conclude the
+  # override is already live when it is not.
+  #
+  # failed_when: false + an explicit rc check, not a bare ignore: on a non-Linux controller (where
+  # the molecule scenario runs) /proc/cmdline simply does not exist, and that is not a fault worth
+  # aborting a dry run over. The rc is what later logic gates on, never .failed — which
+  # failed_when:false pins to False even on real failure.
+  ansible.builtin.slurp:
+    src: /proc/cmdline
+  register: _gpu_running_cmdline
+  failed_when: false
+
+- name: Note the running cmdline
+  ansible.builtin.set_fact:
+    _gpu_running: >-
+      {{ (_gpu_running_cmdline.content | b64decode | trim)
+         if (_gpu_running_cmdline.content is defined) else '(unreadable)' }}
+
+- name: Detect the bootloader's cmdline file
+  # PVE uses systemd-boot (/etc/kernel/cmdline) on ZFS/EFI installs and GRUB otherwise. Which one is
+  # authoritative decides which file we edit, and editing the wrong one is a silent no-op that only
+  # reveals itself after a reboot that did not take effect.
+  #
+  # Stats _gpu_cmdline_file, NOT a hardcoded path: those two must never disagree. Stat'ing
+  # /etc/kernel/cmdline literally while writing to the overridable var would take the wrong branch
+  # wherever they differ.
+  ansible.builtin.stat:
+    path: "{{ _gpu_cmdline_file }}"
+  register: _gpu_systemd_boot
+
+- name: Detect grub
+  ansible.builtin.stat:
+    path: "{{ _gpu_grub_file }}"
+  register: _gpu_grub
+
+- name: Determine which bootloader owns this host
+  # Explicit three-way, not a boolean. "systemd-boot", "grub", and "neither" need different code
+  # paths and different failure messages; collapsing the last two into "not systemd-boot" would
+  # propose a cmdline containing ONLY the new token on a grub host — i.e. a boot line with no
+  # root=, which is an unbootable machine. A dry run shows the detected path before any write.
+  ansible.builtin.set_fact:
+    _gpu_bootloader: >-
+      {{ 'systemd-boot' if _gpu_systemd_boot.stat.exists
+         else ('grub' if _gpu_grub.stat.exists else 'unknown') }}
+
+- name: HARD GATE — a supported bootloader must be identifiable
+  ansible.builtin.assert:
+    that:
+      - _gpu_bootloader != 'unknown'
+    fail_msg: >-
+      Neither {{ _gpu_cmdline_file }} (systemd-boot) nor {{ _gpu_grub_file }} (grub) exists on
+      {{ inventory_hostname }} — cannot determine where the kernel cmdline lives. Refusing to
+      guess: writing the wrong file leaves the host unchanged at best and unbootable at worst.
+    success_msg: "Bootloader: {{ _gpu_bootloader }}"
+    quiet: true
+
+- name: Locate the GPU on the PCI bus
+  # Device ID, not slot address: slots move when cards are reseated, and this role must not act on
+  # whatever happens to be in a given slot.
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      lspci -Dnn | grep -iE '\[03(00|02|80)\]:' | grep -i '{{ gpu_passthrough_device_id }}' || true
+  register: _gpu_lspci
+  changed_when: false
+
+- name: HARD GATE — the GPU must actually be present
+  # Refusing to proceed rather than writing a cmdline for a card that is not fitted. A no-op that
+  # looks like success would lead to a reboot for nothing.
+  ansible.builtin.assert:
+    that:
+      - (_gpu_lspci.stdout | trim) | length > 0
+    fail_msg: >-
+      No display device matching '{{ gpu_passthrough_device_id }}' found on
+      {{ inventory_hostname }}. Refusing to change the kernel cmdline for a GPU that is not
+      present. Run `lspci -nn` on the host to see what IS on the bus.
+    success_msg: "GPU {{ gpu_passthrough_device_id }} present: {{ _gpu_lspci.stdout | trim }}"
+    quiet: true
+
+- name: Derive the GPU's PCI address
+  ansible.builtin.set_fact:
+    _gpu_addr: "{{ (_gpu_lspci.stdout | trim | split('\n') | first).split()[0] }}"
+
+# --- 1b. THE PREREQUISITE THAT DECIDES WHETHER ANY OF THIS IS WORTH A REBOOT ---------------------
+- name: Check whether any loaded-capable driver actually knows this PCI ID
+  # Freeing a GPU from vfio-pci is pointless if no driver on this kernel can claim it. For
+  # example, PVE 8's 6.8 kernels ship xe.ko, but NEITHER xe NOR i915 carries a PCI alias for
+  # 8086:e20c — Battlemage support arrives around 6.12; 6.14 has it. So the ACS override would split the group
+  # perfectly and the card would still bind nothing.
+  #
+  # That failure is indistinguishable, after the fact, from "the ACS override did not work" — and
+  # it would cost a maintenance window on a hypervisor whose reboot takes down every
+  # guest. Checking a modinfo alias beforehand is free; discovering it after a reboot is not.
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      want="{{ gpu_passthrough_device_id | regex_replace('^[0-9a-fA-F]{4}:', '') | lower }}"
+      found=""
+      for m in {{ gpu_passthrough_driver_modules | join(' ') }}; do
+        # Captured then counted, per PIPEQ-01 — a modinfo alias list can be long.
+        _mi=$(modinfo "$m" 2>/dev/null || true)
+        if [ "$(printf '%s' "$_mi" | grep -ci "d0000${want}")" -gt 0 ]; then
+          found="$found $m"
+        fi
+      done
+      echo "MODULES_WITH_ALIAS|${found# }"
+      echo "KERNEL|$(uname -r)"
+  register: _gpu_driver_alias
+  changed_when: false
+  failed_when: false
+
+- name: Determine whether a driver can claim this GPU
+  ansible.builtin.set_fact:
+    _gpu_alias_modules: >-
+      {{ (_gpu_driver_alias.stdout_lines | default([]) | select('match', '^MODULES_WITH_ALIAS\|')
+          | first | default('MODULES_WITH_ALIAS|')).split('|')[1] | trim }}
+
+- name: HARD GATE — a host driver must be able to claim the GPU on this kernel
+  # Skippable, because "install a newer kernel first" is a legitimate plan and this role should not
+  # block staging the cmdline change ahead of it — but NOT skippable by accident: it has to be
+  # turned off explicitly, with the consequence stated.
+  ansible.builtin.assert:
+    that:
+      - (_gpu_alias_modules | length) > 0
+    fail_msg: >-
+      No driver on {{ inventory_hostname }}'s running kernel
+      ({{ (_gpu_driver_alias.stdout_lines | default([]) | select('match', '^KERNEL\|')
+           | first | default('KERNEL|?')).split('|')[1] }})
+      has a PCI alias for {{ gpu_passthrough_device_id }} — checked
+      {{ gpu_passthrough_driver_modules | join(', ') }}.
+      Freeing the card from vfio-pci would achieve NOTHING: it would bind no driver, and that looks
+      exactly like the ACS override having failed.
+      For an Arc (Battlemage) card this means the kernel is older than ~6.12 — install
+      proxmox-kernel-6.14 (or newer) FIRST, so one reboot covers both changes.
+      To stage the cmdline change anyway, ahead of a kernel upgrade, re-run with
+      gpu_passthrough_require_driver=false.
+    success_msg: >-
+      {{ gpu_passthrough_device_id }} is claimable by: {{ _gpu_alias_modules }}.
+    quiet: true
+  when: gpu_passthrough_require_driver | bool
+
+- name: Report that the driver prerequisite was deliberately skipped
+  ansible.builtin.debug:
+    msg: >-
+      WARNING — gpu_passthrough_require_driver=false and no loaded-capable driver has an alias for
+      {{ gpu_passthrough_device_id }} on this kernel. The cmdline change will be staged, but the
+      GPU will NOT bind until a kernel that supports it is installed. Do not conclude from a failed
+      post-reboot check that the ACS override did not work.
+  when:
+    - not (gpu_passthrough_require_driver | bool)
+    - (_gpu_alias_modules | length) == 0
+
+# --- 2. the safety interlock: never touch the HBA/NIC vfio bindings ------------------------------
+- name: Read the vfio-pci modprobe options, if any
+  ansible.builtin.slurp:
+    src: "{{ gpu_passthrough_vfio_conf }}"
+  register: _gpu_vfio_conf
+  failed_when: false
+
+- name: HARD GATE — the GPU must not be bound to vfio BY ID
+  # THE MOST IMPORTANT GUARD IN THIS ROLE.
+  #
+  # On a host that already passes other devices through, `ids=` legitimately lists them (a SAS HBA
+  # for a storage VM, a NIC). If the GPU were ALSO listed there, the correct fix would be to remove
+  # that one id — but doing so by machine risks editing a line whose other entries are
+  # load-bearing: a mistake there silently detaches another guest's disks.
+  #
+  # So the role asserts the GPU is absent from the list and STOPS if it is present, rather than
+  # "helpfully" rewriting it. An ACS override cannot help in that case anyway — an explicit id
+  # binding beats any grouping change — so proceeding would be wrong as well as dangerous.
+  vars:
+    _vfio_text: "{{ (_gpu_vfio_conf.content | default('') | b64decode) }}"
+  ansible.builtin.assert:
+    that:
+      - gpu_passthrough_device_id | lower not in (_vfio_text | lower)
+    fail_msg: >-
+      {{ gpu_passthrough_vfio_conf }} binds {{ gpu_passthrough_device_id }} to vfio-pci by ID:
+      "{{ _vfio_text | trim }}".
+      An ACS override cannot free a device that is explicitly bound by ID. Remove that ONE id by
+      hand — the other entries in this line are passed through to running VMs and must not change —
+      then re-run. This role deliberately will not edit that line for you.
+    success_msg: >-
+      {{ gpu_passthrough_device_id }} is not bound by ID in {{ gpu_passthrough_vfio_conf }}
+      (it is claimed via its IOMMU group, which the ACS override addresses).
+    quiet: true
+
+# --- 2b. driver userspace + firmware -------------------------------------------------------------
+- name: Install GPU driver firmware and userspace
+  # Gated on apply like everything else: installing packages is low risk but is still a change to
+  # the host, and a "report what you would do" run must not quietly mutate apt state.
+  #
+  # The list is deliberately MINIMAL, and firmware-misc-nonfree is deliberately NOT in it:
+  # pve-firmware declares Conflicts/Replaces against that package, so apt would propose removing
+  # pve-firmware on a hypervisor immediately before a planned reboot. It is also redundant —
+  # pve-firmware already ships the Battlemage blobs (/lib/firmware/xe/bmg_guc_70.bin is
+  # owned by pve-firmware). See meta/argument_specs.py for the full reasoning.
+  ansible.builtin.apt:
+    name: "{{ gpu_passthrough_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when:
+    - gpu_passthrough_apply | bool
+    - gpu_passthrough_install_packages | bool
+
+- name: Report the package state that WOULD be installed
+  ansible.builtin.debug:
+    msg: >-
+      DRY RUN — would ensure packages present: {{ gpu_passthrough_packages | join(', ') }}
+  when:
+    - not (gpu_passthrough_apply | bool)
+    - gpu_passthrough_install_packages | bool
+
+# --- 3. compute the desired cmdline -------------------------------------------------------------
+- name: Read the bootloader cmdline file
+  ansible.builtin.slurp:
+    src: "{{ _gpu_cmdline_file if _gpu_bootloader == 'systemd-boot' else _gpu_grub_file }}"
+  register: _gpu_cmdline_current
+
+- name: Extract the current token string for this bootloader
+  # systemd-boot's file IS the cmdline. GRUB's is a shell fragment where the tokens live inside
+  # GRUB_CMDLINE_LINUX_DEFAULT="..." — so the value has to be pulled out of the assignment, and
+  # later written back INTO it. Treating the grub file as a raw cmdline would append the token
+  # after the closing quote and corrupt the shell syntax.
+  #
+  # splitlines(), NOT split('\n'): inside a folded (>-) YAML scalar the two characters \ and n are
+  # passed to Jinja literally, so split('\n') looks for a backslash-n and NEVER splits — the same
+  # family as `\b` being a backspace in a non-raw string. It fails silently: the select() then
+  # matches nothing, the "current cmdline" reads as empty, and the role proposes a boot line
+  # containing only the new token. Caught by the read-back gate, which is why that gate exists.
+  vars:
+    _raw: "{{ _gpu_cmdline_current.content | b64decode }}"
+    _grub_line: >-
+      {{ (_raw.splitlines() | select('match', '^\s*' ~ _gpu_grub_key ~ '=') | list | last | default('')) }}
+  ansible.builtin.set_fact:
+    _gpu_grub_raw_line: "{{ _grub_line | trim }}"
+    _gpu_tokens_before: >-
+      {{ (_raw | trim) if _gpu_bootloader == 'systemd-boot'
+         else (_grub_line | regex_replace('^\s*' ~ _gpu_grub_key ~ '="?', '') | regex_replace('"\s*$', '') | trim) }}
+
+- name: HARD GATE — grub's cmdline variable must have been found
+  # An unmatched regex yields an empty string, which would look like "the current cmdline is empty"
+  # and lead the role to propose a line containing only the new token. On grub that means dropping
+  # every existing boot parameter. Distinguishing "empty because absent" from "genuinely empty" is
+  # the whole point of this gate.
+  ansible.builtin.assert:
+    that:
+      - (_gpu_cmdline_current.content | b64decode) is search('^\s*' ~ _gpu_grub_key ~ '=', multiline=True)
+    fail_msg: >-
+      Could not find {{ _gpu_grub_key }}= in {{ _gpu_grub_file }} on {{ inventory_hostname }}.
+      Refusing to write a cmdline derived from an empty read — that would drop every existing
+      boot parameter.
+    success_msg: "{{ _gpu_grub_key }} found: '{{ _gpu_tokens_before }}'"
+    quiet: true
+  when: _gpu_bootloader == 'grub'
+
+- name: HARD GATE — grub's cmdline line must be a simple double-quoted assignment
+  # The extraction strips a leading KEY=" and a trailing ", which is correct ONLY for the simple
+  # shape. Verified failure: with a trailing comment —
+  #     GRUB_CMDLINE_LINUX_DEFAULT="quiet iommu=pt"  # tuned
+  # — extraction yields `quiet iommu=pt"  # tuned`, and the rewritten line puts the new token AFTER
+  # a shell comment, so it never reaches the kernel. update-grub succeeds, and the read-back gate
+  # CANNOT catch it because it re-extracts with the same expression. The result is an apply that
+  # reports success, a reboot, and a cmdline with no ACS override — indistinguishable from "the
+  # override did not split the group".
+  #
+  # So the shape is validated up front instead. Single quotes are rejected for the same reason:
+  # they would leak a literal ' onto the kernel cmdline.
+  ansible.builtin.assert:
+    that:
+      - _gpu_grub_raw_line is match('^\s*' ~ _gpu_grub_key ~ '="[^"#]*"\s*$')
+    fail_msg: >-
+      {{ _gpu_grub_key }} in {{ _gpu_grub_file }} is not a simple double-quoted assignment, so this
+      role cannot safely edit it. Found: {{ _gpu_grub_raw_line }}
+      Expected exactly: {{ _gpu_grub_key }}="token token token"
+      (no trailing comment, no single quotes, no line continuation). Edit it by hand, or normalise
+      the line first — appending to any other shape can silently place the new token inside a shell
+      comment, where it never reaches the kernel.
+    success_msg: "{{ _gpu_grub_key }} line has the expected simple shape."
+    quiet: true
+  when: _gpu_bootloader == 'grub'
+
+- name: Compute the desired cmdline by APPENDING only the missing tokens
+  # APPEND-IF-MISSING, never a rewritten line: the existing cmdline carries root=, the iommu
+  # settings and whatever else this host needs to boot, and regenerating it from a template is how
+  # a hypervisor stops booting. Only genuinely-absent tokens are added, which also makes the role
+  # idempotent for free — applying twice is a no-op.
+  #
+  # NOT `| union()`, though it is the obvious choice: Jinja's
+  # union is set-like and REORDERS the result, emitting e.g. "ro iommu=pt BOOT_IMAGE=... root=...".
+  # The kernel parses that fine, but a scrambled boot line on a production hypervisor is alarming
+  # to read, makes before/after diffs useless, and looks like corruption.
+  # Preserving the operator's original ordering costs nothing.
+  vars:
+    _current: "{{ _gpu_tokens_before }}"
+    _missing: "{{ gpu_passthrough_cmdline_tokens | reject('in', _current.split()) | list }}"
+  ansible.builtin.set_fact:
+    _gpu_cmdline_before: "{{ _current }}"
+    _gpu_cmdline_after: "{{ (_current.split() + _missing) | join(' ') }}"
+
+- name: Determine whether a change is actually needed
+  ansible.builtin.set_fact:
+    _gpu_cmdline_changed: "{{ (_gpu_cmdline_before.split() | sort) != (_gpu_cmdline_after.split() | sort) }}"
+
+# --- 4. report (always) --------------------------------------------------------------------------
+- name: Report the planned change
+  ansible.builtin.debug:
+    msg:
+      - "host:            {{ inventory_hostname }}"
+      - "gpu:             {{ gpu_passthrough_device_id }} at {{ _gpu_addr }}"
+      # Reports the file that will ACTUALLY be written, not the systemd-boot path — naming the
+      # wrong file in a report that authorises a boot-config change is its own hazard.
+      - "bootloader:      {{ _gpu_bootloader }}"
+      - "file to change:  {{ _gpu_target_file }}"
+      - "refresh command: {{ _gpu_refresh_cmd }}"
+      - "running cmdline: {{ _gpu_running }}"
+      - "cmdline before:  {{ _gpu_cmdline_before }}"
+      - "cmdline after:   {{ _gpu_cmdline_after }}"
+      - "change needed:   {{ _gpu_cmdline_changed }}"
+      - "apply:           {{ gpu_passthrough_apply | bool }}"
+
+- name: Report that a previously-applied change is still awaiting a reboot
+  # The case that would otherwise read as "nothing to do": the on-disk cmdline already carries the
+  # tokens (so change_needed is false) but the RUNNING kernel does not, because the host has not
+  # been rebooted since. Without this line an operator re-running the role sees a clean no-op and
+  # can reasonably conclude the override is already in effect.
+  ansible.builtin.debug:
+    msg: >-
+      PENDING REBOOT — {{ _gpu_target_file }} already contains the requested tokens, but the
+      RUNNING kernel does not. The change takes effect at the next boot of {{ inventory_hostname }}.
+  when:
+    - not (_gpu_cmdline_changed | bool)
+    - _gpu_running != '(unreadable)'
+    - gpu_passthrough_cmdline_tokens | reject('in', _gpu_running.split()) | list | length > 0
+
+- name: Report that this is a dry run
+  ansible.builtin.debug:
+    msg: >-
+      DRY RUN — nothing was written. Re-run with gpu_passthrough_apply=true to apply, then reboot
+      the host in a maintenance window (this role never reboots).
+  when:
+    - not (gpu_passthrough_apply | bool)
+    - _gpu_cmdline_changed | bool
+
+# --- 5. apply ------------------------------------------------------------------------------------
+- name: Apply the cmdline change
+  when:
+    - gpu_passthrough_apply | bool
+    - _gpu_cmdline_changed | bool
+  block:
+    - name: Back up the bootloader config
+      # Timestamped, and the restore command is printed below. This backup IS the rollback path for
+      # the whole change, so it is taken before the write and its path is surfaced to the operator
+      # rather than left to be discovered.
+      #
+      # force: false so a re-run cannot overwrite the ORIGINAL backup with an already-modified
+      # file, which would silently destroy the only route back to the pre-change state.
+      ansible.builtin.copy:
+        src: "{{ _gpu_target_file }}"
+        dest: "{{ _gpu_target_file }}.bak-{{ _gpu_backup_stamp }}"
+        remote_src: true
+        mode: "0644"
+        force: false
+
+    - name: Write the new cmdline (systemd-boot — the file IS the cmdline)
+      ansible.builtin.copy:
+        dest: "{{ _gpu_cmdline_file }}"
+        content: "{{ _gpu_cmdline_after }}\n"
+        mode: "0644"
+      when: _gpu_bootloader == 'systemd-boot'
+
+    - name: Write the new cmdline (grub — replace only the value inside the assignment)
+      # lineinfile with an anchored regexp, NOT a template of the whole file: /etc/default/grub
+      # carries many other settings (timeout, distributor, terminal config) that are none of this
+      # role's business, and rewriting the file would silently discard them.
+      #
+      # backrefs is deliberately NOT used: the replacement is a complete, fully-quoted assignment,
+      # so there is nothing to carry over from the old line. Anchored to the start so a commented
+      # or differently-named variable cannot match.
+      ansible.builtin.lineinfile:
+        path: "{{ _gpu_grub_file }}"
+        regexp: "^\\s*{{ _gpu_grub_key }}="
+        line: '{{ _gpu_grub_key }}="{{ _gpu_cmdline_after }}"'
+        state: present
+      when: _gpu_bootloader == 'grub'
+
+    - name: Read the bootloader config back from disk
+      # An explicit read-back rather than trusting the module's changed status: this file decides
+      # whether the host boots, and "the write reported success" is a weaker statement than "the
+      # file on disk now contains what we intended".
+      ansible.builtin.slurp:
+        src: "{{ _gpu_target_file }}"
+      register: _gpu_cmdline_readback
+
+    - name: HARD GATE — the cmdline on disk must match what we intended
+      # Checks the TOKENS, extracted the same way they were read, rather than the raw file: on grub
+      # the file also contains unrelated settings, so a whole-file comparison would be meaningless.
+      vars:
+        _back: "{{ _gpu_cmdline_readback.content | b64decode }}"
+        _back_tokens: >-
+          {{ (_back | trim) if _gpu_bootloader == 'systemd-boot'
+             else ((_back.splitlines() | select('match', '^\s*' ~ _gpu_grub_key ~ '=') | list | last | default(''))
+                   | regex_replace('^\s*' ~ _gpu_grub_key ~ '="?', '') | regex_replace('"\s*$', '') | trim) }}
+      ansible.builtin.assert:
+        that:
+          - _back_tokens == _gpu_cmdline_after
+        fail_msg: >-
+          {{ _gpu_target_file }} does not contain the intended cmdline after writing.
+          On disk: "{{ _back_tokens }}".
+          Intended: "{{ _gpu_cmdline_after }}".
+          RESTORE NOW:
+          cp {{ _gpu_target_file }}.bak-{{ _gpu_backup_stamp }} {{ _gpu_target_file }}
+          && {{ _gpu_refresh_cmd }}
+        success_msg: "cmdline verified on disk: {{ _back_tokens }}"
+        quiet: true
+
+    - name: Refresh the bootloader so the new cmdline is installed
+      # Without this the config file is edited but the installed boot entries still carry the old
+      # cmdline — the change silently does not take effect at the next boot, which is
+      # indistinguishable from "the ACS override did not work" and would send the operator down
+      # entirely the wrong diagnostic path.
+      ansible.builtin.command:
+        cmd: "{{ _gpu_refresh_cmd }}"
+      register: _gpu_boot_refresh
+      changed_when: true
+      # failed_when:false so the rc-gating assert below is REACHABLE. Without it a non-zero rc
+      # aborts the play at this task and the operator gets a raw module error instead of the
+      # "do NOT reboot / here is the restore command" guidance — at the one moment it matters.
+      # The assert is what actually fails the run; rc is gated explicitly, never .failed (which
+      # failed_when:false pins to False even on genuine failure).
+      failed_when: false
+
+    - name: HARD GATE — the bootloader refresh must have succeeded
+      # update-grub failing leaves a host whose /etc/default/grub says one thing and whose grub.cfg
+      # says another. Since the whole change is invisible until a reboot, a failure here that was
+      # merely logged would be discovered at the worst possible moment.
+      ansible.builtin.assert:
+        that:
+          - _gpu_boot_refresh.rc == 0
+        fail_msg: >-
+          {{ _gpu_refresh_cmd }} FAILED (rc={{ _gpu_boot_refresh.rc }}).
+          The config file was written but the bootloader was NOT updated — do NOT reboot.
+          stderr: {{ _gpu_boot_refresh.stderr | default('') | trim }}
+          RESTORE: cp {{ _gpu_target_file }}.bak-{{ _gpu_backup_stamp }} {{ _gpu_target_file }}
+          && {{ _gpu_refresh_cmd }}
+        success_msg: "Bootloader refreshed."
+        quiet: true
+
+    - name: Report the rollback command
+      ansible.builtin.debug:
+        msg:
+          - "APPLIED to {{ _gpu_target_file }} ({{ _gpu_bootloader }})."
+          - "The host must be REBOOTED for this to take effect — this role does not reboot."
+          - "Backup:   {{ _gpu_target_file }}.bak-{{ _gpu_backup_stamp }}"
+          - "ROLLBACK: cp {{ _gpu_target_file }}.bak-{{ _gpu_backup_stamp }} {{ _gpu_target_file }} && {{ _gpu_refresh_cmd }} && reboot"

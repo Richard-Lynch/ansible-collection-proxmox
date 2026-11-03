@@ -1,0 +1,44 @@
+# Copyright: (c) 2026, Richard Lynch
+# GNU General Public License v3.0+ (see https://www.gnu.org/licenses/gpl-3.0.txt)
+---
+DOCUMENTATION:
+  name: dpl_lxc_config_drift
+  short_description: Report every declared LXC setting that differs from the live configuration
+  author: Richard Lynch (@Richard-Lynch)
+  description:
+    - Compares a container's live configuration, as Proxmox VE's
+      C(GET /nodes/{node}/lxc/{vmid}/config) returns it, with the declared one.
+    - Only declared keys are compared. Keys Proxmox VE adds itself (C(hwaddr), C(type=veth),
+      C(digest), a mount point owned by another play) are not drift.
+    - C(tags) compare as a set (a list against Proxmox VE's C(;)-joined string), C(description)
+      ignoring trailing whitespace, booleans inside C(k=v) strings as 1/0, and an absent C(onboot)
+      as off.
+  options:
+    _input:
+      description: The live configuration dict. An empty or null value means no container.
+      type: dict
+      required: true
+    desired:
+      description:
+        - 'The declared configuration: C(hostname), C(description) (str); C(cores), C(memory),
+          C(swap) (int); C(onboot) (bool); C(tags) (list); C(features), C(startup) (dict);
+          C(net) (dict of C(netN) to a C(k=v,...) string, or its JSON); C(rootfs)
+          (C(storage) and C(size_gb)).'
+        - A key whose value is null is not compared.
+      type: dict
+      required: true
+EXAMPLES: |
+  - name: Compute the drift of a container
+    ansible.builtin.set_fact:
+      drift: "{{ live_config | richard_lynch.proxmox.dpl_lxc_config_drift({'memory': 4096, 'tags': ['docker']}) }}"
+RETURN:
+  _value:
+    description: One entry per drifted key, empty when the container is in sync.
+    type: dict
+    contains:
+      current:
+        description: The live value.
+        type: raw
+      desired:
+        description: The declared value.
+        type: raw

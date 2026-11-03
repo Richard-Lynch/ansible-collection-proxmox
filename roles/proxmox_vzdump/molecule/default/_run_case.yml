@@ -1,0 +1,111 @@
+---
+# One case: install a fake `pvesh` that answers the role's two read-only queries from `case.jobs`,
+# then run the REAL role and record what it decided.
+#
+# The role's write paths (`pvesh create` / `pvesh set`) are reached via the same fake binary, which
+# records the call instead of performing it — so the create/update decision is observable without a
+# cluster, and without the test having to re-derive the condition that guards it.
+
+- name: "{{ case.name }} — install the fake pvesh"
+  ansible.builtin.copy:
+    dest: "{{ _fakebin.path }}/pvesh"
+    mode: "0755"
+    content: |
+      #!/usr/bin/env python3
+      # Minimal `pvesh` stand-in. Answers the GETs the role makes, logs any write, and APPLIES a
+      # write to what later GETs return — the role reads the job back after writing it, and a fake
+      # that always returned the original stub would fail every drift case for the wrong reason.
+      import json, os, sys
+      argv = sys.argv[1:]
+      log = "{{ _fakebin.path }}/calls.log"
+      state = "{{ _fakebin.path }}/state.json"
+      jobs = {{ case.jobs | to_json }}
+      if os.path.exists(state):
+          with open(state) as fh:
+              jobs = json.load(fh)
+      def pairs(args):
+          return {a[1:]: args[i + 1] for i, a in enumerate(args) if a.startswith("-") and i + 1 < len(args)}
+      if argv[:1] == ["get"]:
+          path = argv[1]
+          if path.startswith("/storage/"):
+              print(json.dumps({"content": "backup,images"}))
+          elif path == "/cluster/backup":
+              print(json.dumps(jobs))
+          else:
+              print("unexpected GET " + path, file=sys.stderr); sys.exit(2)
+          sys.exit(0)
+      # A write: record it, then apply it to the state later GETs read.
+      with open(log, "a") as fh:
+          fh.write(" ".join(argv) + "\n")
+      target = argv[1].rsplit("/", 1)[-1]
+      if argv[0] == "set":
+          for j in jobs:
+              if j.get("id") == target:
+                  j.update(pairs(argv[2:]))
+      elif argv[0] == "create":
+          jobs.append(dict(pairs(argv[2:]), id="backup-new"))
+      with open(state, "w") as fh:
+          json.dump(jobs, fh)
+  changed_when: false        # test scaffolding, not a convergence step
+
+- name: "{{ case.name }} — clear the call log"
+  ansible.builtin.copy:
+    dest: "{{ _fakebin.path }}/calls.log"
+    content: ""
+    mode: "0644"
+  changed_when: false        # test scaffolding, not a convergence step
+
+- name: "{{ case.name }} — drop the previous case's job state"
+  ansible.builtin.file:
+    path: "{{ _fakebin.path }}/state.json"
+    state: absent
+  changed_when: false        # test scaffolding, not a convergence step
+
+# Reset the role's facts between cases: set_fact values persist for the whole play, so case B would
+# otherwise read case A's _our_job and pass for the wrong reason.
+- name: "{{ case.name }} — clear facts carried over from the previous case"
+  ansible.builtin.set_fact:
+    _our_job: null
+    _needs_update: null
+    _prune_current: null
+    _prune_wanted: null
+    _our_job_after: null
+
+# PATH is set at PLAY level in converge.yml — `environment:` is not a valid attribute on
+# include_role, and setting it there fails the play outright.
+- name: "{{ case.name }} — run the REAL role with the fake pvesh first on PATH"
+  ansible.builtin.include_role:
+    name: proxmox_vzdump
+
+- name: "{{ case.name }} — read back what the role actually did"
+  ansible.builtin.slurp:
+    src: "{{ _fakebin.path }}/calls.log"
+  register: _calls
+
+# Written to a FILE, not just a fact: molecule runs verify.yml as a separate ansible-playbook
+# invocation, so set_fact from converge is long gone by then.
+# The split MUST live in a double-quoted scalar: in the folded (>-) block below, a backslash is
+# not an escape, so `split("\n")` there reached Jinja as a literal backslash-n and never split —
+# `writes` came back [] for every case and the write assertions passed vacuously.
+- name: "{{ case.name }} — split the call log into lines"
+  ansible.builtin.set_fact:
+    _calls_lines: "{{ (_calls.content | b64decode) | trim | split(\"\n\") | reject('equalto', '') | list }}"
+
+- name: "{{ case.name }} — record the decision for verify.yml"
+  ansible.builtin.set_fact:
+    vzdump_results: >-
+      {{ (vzdump_results | default([])) + [{
+           'name': case.name,
+           'expect_id': case.expect_id,
+           'expect_needs_update': case.expect_needs_update,
+           'got_id': (_our_job | default({}) | default({}, true)).get('id', ''),
+           'got_needs_update': (_needs_update | default(false) | bool),
+           'writes': _calls_lines,
+         }] }}
+
+- name: "{{ case.name }} — persist the results for verify.yml"
+  ansible.builtin.copy:
+    dest: "{{ _fakebin.path }}/results.json"
+    content: "{{ vzdump_results | to_nice_json }}"
+    mode: "0644"
+  changed_when: false        # test scaffolding, not a convergence step

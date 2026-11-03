@@ -1,0 +1,9 @@
+---
+- name: Converge (load defaults)
+  hosts: localhost
+  gather_facts: false
+  vars_files: ["{{ playbook_dir }}/../../defaults/main.yml"]
+  tasks:
+    - name: Expose sudo commands
+      ansible.builtin.set_fact:
+        _sudo: "{{ proxmox_ci_ssh_sudo_commands }}"

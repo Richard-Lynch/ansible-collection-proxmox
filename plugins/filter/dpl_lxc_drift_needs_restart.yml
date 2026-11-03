@@ -1,0 +1,24 @@
+# Copyright: (c) 2026, Richard Lynch
+# GNU General Public License v3.0+ (see https://www.gnu.org/licenses/gpl-3.0.txt)
+---
+DOCUMENTATION:
+  name: dpl_lxc_drift_needs_restart
+  short_description: Whether an LXC configuration drift needs the running container restarted
+  author: Richard Lynch (@Richard-Lynch)
+  description:
+    - True when any drifted key is one a running container only picks up on restart.
+    - Drift only in C(description), C(tags), C(onboot) or C(startup) does not need a restart.
+  options:
+    _input:
+      description: A drift dict, as P(richard_lynch.proxmox.dpl_lxc_config_drift#filter) returns it.
+      type: dict
+      required: true
+EXAMPLES: |
+  - name: Restart only when the drift needs it
+    ansible.builtin.debug:
+      msg: "restart needed"
+    when: drift | richard_lynch.proxmox.dpl_lxc_drift_needs_restart
+RETURN:
+  _value:
+    description: Whether a restart is needed.
+    type: bool

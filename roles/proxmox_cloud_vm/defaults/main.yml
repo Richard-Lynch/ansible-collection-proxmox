@@ -1,0 +1,56 @@
+---
+# AUTO-GENERATED defaults file — DO NOT EDIT.
+#
+# Source of truth: roles/proxmox_cloud_vm/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate proxmox_cloud_vm
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+# Entrypoint:      main
+
+# Balloon floor in MB: the host may reclaim memory down to this when it is
+# under pressure. 0 disables ballooning (the VM always holds its ceiling).
+proxmox_cloud_vm_balloon_mb__default: 0
+
+# Storage for the disk and the cloud-init drive.
+proxmox_cloud_vm_storage__default: local-lvm
+
+# Bridge the NIC attaches to.
+proxmox_cloud_vm_bridge__default: vmbr0
+
+# Proxmox tags.
+proxmox_cloud_vm_tags__default:
+  - ansible
+
+# Free-text description shown in the UI.
+proxmox_cloud_vm_description__default: ''
+
+# Start the VM when the node boots.
+proxmox_cloud_vm_onboot__default: true
+
+# Boot order among guests; 0 sets no ordering.
+proxmox_cloud_vm_startup_order__default: 0
+
+# Cloud-init login user. Gets passwordless sudo from the image.
+proxmox_cloud_vm_ci_user__default: ubuntu
+
+# Directory on the node the image is downloaded into.
+proxmox_cloud_vm_image_dir__default: /var/lib/vz/template/iso
+
+# Storage whose content types include snippets, where the cloud-init
+# vendor-data file is written. The Ubuntu cloud image ships WITHOUT
+# qemu-guest-agent, so without vendor-data that installs it the agent
+# wait below can never succeed.
+proxmox_cloud_vm_snippet_storage__default: local
+
+# Add 'snippets' to the snippet storage's content types when it lacks them
+# (additive; existing types are kept). Off by default because it edits
+# cluster-wide storage configuration; when off and missing, the role refuses.
+proxmox_cloud_vm_snippet_enable__default: false
+
+# Directory on the node that snippet_storage serves as 'snippets'.
+proxmox_cloud_vm_snippet_dir__default: /var/lib/vz/snippets
+
+# How long to wait for the QEMU guest agent to answer after start.
+proxmox_cloud_vm_agent_wait_seconds__default: 300

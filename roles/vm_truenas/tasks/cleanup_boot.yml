@@ -1,0 +1,29 @@
+---
+- name: Remove installation ISO (detach ide2 CD-ROM and update the boot order)
+  community.general.proxmox_kvm:
+    api_host: "{{ proxmox.api_host }}"
+    node: "{{ proxmox.node }}"
+    api_user: "{{ proxmox.user }}"
+    api_password: "{{ proxmox.password }}"
+
+    vmid: "{{ truenas_vm_id }}"
+
+    ide:
+      ide2: "none"
+    boot: "order=scsi0"
+
+    update: true
+    # needed to mess with `ide` https://docs.ansible.com/ansible/latest/collections/community/general/proxmox_kvm_module.html#parameter-update_unsafe
+    update_unsafe: true
+
+- name: Restart VM
+  community.general.proxmox_kvm:
+    api_host: "{{ proxmox.api_host }}"
+    node: "{{ proxmox.node }}"
+
+    api_user: "{{ proxmox.user }}"
+    api_password: "{{ proxmox.password }}"
+
+    vmid: "{{ truenas_vm_id }}"
+
+    state: restarted

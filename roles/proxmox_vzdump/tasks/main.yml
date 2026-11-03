@@ -1,0 +1,140 @@
+---
+# proxmox_vzdump — reconcile a cluster-wide nightly vzdump job via pvesh. Runs on ONE PVE node (the
+# job is written to cluster-shared /etc/pve/jobs.cfg). Idempotent: matched on our comment tag.
+
+- name: Assert the target storage accepts backups
+  block:
+    - name: Query storage for content=backup
+      ansible.builtin.command:
+        cmd: "pvesh get /storage/{{ proxmox_vzdump_storage }} --output-format json"
+      register: _stor
+      changed_when: false
+      check_mode: false # read-only; must run under --check so the assert + reconcile can plan
+    - name: Fail if the storage can't hold backups
+      ansible.builtin.assert:
+        that:
+          - "'backup' in (_stor.stdout | from_json).content"
+        fail_msg: >-
+          Storage '{{ proxmox_vzdump_storage }}' does not have content=backup. Choose a backup-capable
+          storage (dir/nfs/pbs) — see /etc/pve/storage.cfg.
+        quiet: true
+
+- name: List existing backup jobs
+  ansible.builtin.command:
+    cmd: "pvesh get /cluster/backup --output-format json"
+  register: _jobs
+  changed_when: false
+  check_mode: false # read-only; must run under --check so the reconcile can plan
+
+- name: Find our managed job (by comment tag)
+  ansible.builtin.set_fact:
+    _our_job: >-
+      {{ (_jobs.stdout | from_json)
+         | selectattr('comment', 'defined')
+         | selectattr('comment', 'search', proxmox_vzdump_job_tag)
+         | list | first | default({}) }}
+
+# Build the pvesh args as a LIST of `-key value` pairs (pvesh CLI convention — NOT key=value, which
+# 400s "too many arguments"). Passed via argv so multi-word values (the comment) survive intact.
+# prune-backups is the modern retention form.
+- name: Assemble job parameters
+  ansible.builtin.set_fact:
+    _vzdump_argv: >-
+      {{
+        [
+          '-storage', proxmox_vzdump_storage,
+          '-schedule', proxmox_vzdump_schedule,
+          '-mode', proxmox_vzdump_mode,
+          '-compress', proxmox_vzdump_compress,
+          '-all', (1 if proxmox_vzdump_all else 0) | string,
+          '-enabled', (1 if proxmox_vzdump_enabled else 0) | string,
+          '-mailnotification', proxmox_vzdump_mailnotification,
+          '-prune-backups', 'keep-daily=' ~ proxmox_vzdump_keep_daily ~ ',keep-weekly=' ~ proxmox_vzdump_keep_weekly ~ ',keep-monthly=' ~ proxmox_vzdump_keep_monthly,
+          '-comment', proxmox_vzdump_comment,
+        ]
+        + (['-exclude', proxmox_vzdump_exclude] if (proxmox_vzdump_exclude | length > 0) else [])
+      }}
+
+- name: Create the nightly backup job (none managed yet)
+  ansible.builtin.command:
+    argv: "{{ ['pvesh', 'create', '/cluster/backup'] + _vzdump_argv }}"
+  register: _create
+  changed_when: true
+  when: not _our_job.id is defined
+
+# Retention is a tracked field too. Without this comparison, changing the proxmox_vzdump_keep_*
+# values could never reach an existing job: the play would report changed=0 while the job kept its
+# old policy.
+- name: Normalise the job's current retention
+  ansible.builtin.include_tasks: _normalise_prune.yml
+  vars:
+    _prune_in: "{{ _our_job['prune-backups'] | default('', true) }}"
+
+- name: Remember the job's current retention and what we want
+  ansible.builtin.set_fact:
+    _prune_current: "{{ _prune_out }}"
+    _prune_wanted: >-
+      keep-daily={{ proxmox_vzdump_keep_daily }},keep-monthly={{ proxmox_vzdump_keep_monthly }},keep-weekly={{ proxmox_vzdump_keep_weekly }}
+
+# Only update if a tracked field actually differs — keeps the play idempotent (pvesh set can't tell us).
+- name: Decide whether the existing job needs updating
+  ansible.builtin.set_fact:
+    _needs_update: >-
+      {{ _our_job.id is defined and (
+           _prune_current != _prune_wanted or
+           (_our_job.storage | default('')) != proxmox_vzdump_storage or
+           (_our_job.schedule | default('')) != proxmox_vzdump_schedule or
+           (_our_job.mode | default('')) != proxmox_vzdump_mode or
+           (_our_job.compress | default('')) != proxmox_vzdump_compress or
+           ((_our_job.enabled | default(1)) | int) != (1 if proxmox_vzdump_enabled else 0) or
+           ((_our_job.all | default(0)) | int) != (1 if proxmox_vzdump_all else 0)
+         ) }}
+
+- name: Update the existing managed job (only when it differs)
+  ansible.builtin.command:
+    argv: "{{ ['pvesh', 'set', '/cluster/backup/' ~ _our_job.id] + _vzdump_argv }}"
+  register: _update
+  changed_when: true
+  when: _needs_update | default(false) | bool
+
+# "pvesh set returned 0" says the call was accepted, not that the job now holds the policy.
+- name: Read the job back after a write
+  ansible.builtin.command:
+    cmd: "pvesh get /cluster/backup --output-format json"
+  register: _jobs_after
+  changed_when: false
+  check_mode: false # read-only
+  when: (_create is changed) or (_update is changed)
+
+- name: Pick our job out of the read-back
+  ansible.builtin.set_fact:
+    _our_job_after: >-
+      {{ (_jobs_after.stdout | from_json)
+         | selectattr('comment', 'defined')
+         | selectattr('comment', 'search', proxmox_vzdump_job_tag)
+         | list | first | default({}) }}
+  when: _jobs_after is not skipped
+
+- name: Normalise the retention the job now holds
+  ansible.builtin.include_tasks: _normalise_prune.yml
+  vars:
+    _prune_in: "{{ _our_job_after['prune-backups'] | default('', true) }}"
+  when: _jobs_after is not skipped
+
+- name: HARD GATE — the job must hold the retention we asked for
+  ansible.builtin.assert:
+    that:
+      - _our_job_after.id is defined
+      - _prune_out == _prune_wanted
+    fail_msg: >-
+      After the write, the managed job holds retention '{{ _prune_out | default('') }}' but
+      '{{ _prune_wanted }}' was requested (job id '{{ _our_job_after.id | default('absent') }}').
+    quiet: true
+  when: _jobs_after is not skipped
+
+- name: Report
+  ansible.builtin.debug:
+    msg: >-
+      vzdump nightly job {{ 'updated' if _our_job.id is defined else 'created' }} →
+      storage={{ proxmox_vzdump_storage }} schedule={{ proxmox_vzdump_schedule }}
+      mode={{ proxmox_vzdump_mode }} retention=d{{ proxmox_vzdump_keep_daily }}/w{{ proxmox_vzdump_keep_weekly }}/m{{ proxmox_vzdump_keep_monthly }}

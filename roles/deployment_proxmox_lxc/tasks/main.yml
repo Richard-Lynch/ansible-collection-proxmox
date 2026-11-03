@@ -1,0 +1,23 @@
+---
+- name: Resolve declared options over their generated defaults
+  # GENERATED from meta/argument_specs.py — binds every declared option to its
+  # default. utils_verify_connection_retries/_delay were referenced by create.yml and
+  # defined NOWHERE, so the post-create wait raised "undefined" the first time a
+  # caller reached it. This is what stops that recurring.
+  ansible.builtin.include_tasks: _resolve_defaults.yml
+
+- name: Set up the role variables
+  ansible.builtin.include_tasks: set_vars.yml
+
+- name: Ensure the LXC container is created and started
+  ansible.builtin.include_tasks: create.yml
+
+- name: Verify the SSH connection work can be established
+  ansible.builtin.include_role:
+    name: richard_lynch.common.utils_verify_connection
+  vars:
+    utils_verify_connection_hostname: "{{ deployment_proxmox_lxc_container.hostname }}"
+    utils_verify_connection_wait_timeout: "{{ deployment_proxmox_lxc_const.utils_verify_connection_wait_timeout }}"
+    utils_verify_connection_wait_connect_timeout: "{{ deployment_proxmox_lxc_const.utils_verify_connection_wait_connect_timeout }}"
+    utils_verify_connection_wait_delay: "{{ deployment_proxmox_lxc_const.utils_verify_connection_wait_delay }}"
+    utils_verify_connection_wait_sleep: "{{ deployment_proxmox_lxc_const.utils_verify_connection_wait_sleep }}"

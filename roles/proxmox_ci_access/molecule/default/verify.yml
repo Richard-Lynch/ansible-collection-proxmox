@@ -1,0 +1,25 @@
+# Assert the least-privilege contract: guest ops present, host-modify/escalation privs ABSENT.
+---
+- name: Verify the CI priv set is least-privilege
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - "{{ playbook_dir }}/../../defaults/main.yml"
+  tasks:
+    - name: Guest-management privileges are present
+      ansible.builtin.assert:
+        that:
+          - "'VM.Config.Network' in proxmox_ci_access_privs"
+          - "'VM.PowerMgmt' in proxmox_ci_access_privs"
+          - "'VM.Allocate' in proxmox_ci_access_privs"
+        fail_msg: "CI role is missing guest-management privileges it needs."
+
+    - name: Dangerous privileges are ABSENT (no host modify / escalation)
+      ansible.builtin.assert:
+        that:
+          - "'Sys.Modify' not in proxmox_ci_access_privs"
+          - "'Realm.Allocate' not in proxmox_ci_access_privs"
+          - "'User.Modify' not in proxmox_ci_access_privs"
+          - "'Permissions.Modify' not in proxmox_ci_access_privs"
+        fail_msg: "CI role grants a host-modify/escalation privilege — least-privilege violated!"
+        success_msg: "Least-privilege OK — guest ops only, no host modify/escalation."

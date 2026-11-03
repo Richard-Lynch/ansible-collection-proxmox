@@ -1,0 +1,22 @@
+---
+- name: "Fresh pass {{ _pass }} — proxmox_lxc_docker_fix writes its lines"
+  ansible.builtin.include_role:
+    name: proxmox_lxc_docker_fix
+    tasks_from: configure.yml
+  vars:
+    proxmox_lxc_docker_fix_vmid: "9999"
+    proxmox_lxc_docker_fix_conf_dir: "{{ _dir }}"
+
+- name: "Fresh pass {{ _pass }} — read the file back"
+  ansible.builtin.slurp:
+    src: "{{ _dir }}/9999.conf"
+  register: _after
+
+- name: "Fresh pass {{ _pass }} — record what this pass did"
+  ansible.builtin.set_fact:
+    _fresh_results: >-
+      {{ _fresh_results | default([]) + [{
+           'pass': _pass,
+           'docker_fix_changed': proxmox_lxc_docker_fix__changed | bool,
+           'file_after': _after.content | b64decode,
+         }] }}

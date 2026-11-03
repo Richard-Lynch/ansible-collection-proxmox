@@ -1,0 +1,32 @@
+---
+# proxmox_ci_ssh_access — narrow CI user + authorized_keys + restricted sudoers on a PVE node.
+# Idempotent. The CI runner SSHes in as this user and runs pct/qm/pvesh via sudo; nothing else.
+
+- name: Require the runner public key
+  ansible.builtin.assert:
+    that:
+      - proxmox_ci_ssh_pubkey | length > 0
+    fail_msg: "proxmox_ci_ssh_pubkey (the runner's public key) is required."
+
+- name: Create the CI user
+  ansible.builtin.user:
+    name: "{{ proxmox_ci_ssh_user }}"
+    shell: /bin/bash
+    create_home: true
+    state: present
+
+- name: Authorize the runner's key
+  ansible.posix.authorized_key:
+    user: "{{ proxmox_ci_ssh_user }}"
+    key: "{{ proxmox_ci_ssh_pubkey }}"
+    state: present
+    exclusive: true # only the CI key — no other keys accumulate on this account
+
+- name: Install the restricted sudoers (pct/qm/pvesh only, NOPASSWD)
+  ansible.builtin.copy:
+    dest: "{{ proxmox_ci_ssh_sudoers_file }}"
+    mode: "0440"
+    validate: "visudo -cf %s"
+    content: |
+      # Managed by proxmox_ci_ssh_access — the CI runner may run ONLY these as root.
+      {{ proxmox_ci_ssh_user }} ALL=(root) NOPASSWD: {{ proxmox_ci_ssh_sudo_commands | join(', ') }}

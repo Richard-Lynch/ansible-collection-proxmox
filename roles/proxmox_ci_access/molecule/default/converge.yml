@@ -1,0 +1,14 @@
+# Load the role's defaults so verify can assert on the priv list (no PVE API contact).
+---
+- name: Converge (load defaults only)
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - "{{ playbook_dir }}/../../defaults/main.yml"
+  vars:
+    proxmox_ci_access_role: CIStaging  # required, no default
+  tasks:
+    - name: Expose the priv list for verification
+      ansible.builtin.set_fact:
+        _ci_privs: "{{ proxmox_ci_access_privs }}"
+        _ci_role: "{{ proxmox_ci_access_role }}"

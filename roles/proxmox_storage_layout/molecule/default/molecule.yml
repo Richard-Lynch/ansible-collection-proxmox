@@ -1,0 +1,20 @@
+# Offline scenario — no live LVM/PVE in CI. Verifies the role's defaults are coherent + task file
+# parses (syntax). LVM/pvesm operations are exercised live during use.
+---
+dependency:
+  name: galaxy
+driver:
+  name: default
+platforms:
+  - name: localhost
+provisioner:
+  name: ansible
+  inventory:
+    host_vars:
+      localhost:
+        ansible_connection: local
+  playbooks:
+    converge: converge.yml
+    verify: verify.yml
+verifier:
+  name: ansible

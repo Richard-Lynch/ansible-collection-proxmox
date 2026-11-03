@@ -1,0 +1,16 @@
+---
+# Pure: render the files this role would own. The rendered text is what preview diffs and what
+# apply writes, so the two can never disagree.
+- name: Render cluster.fw
+  ansible.builtin.set_fact:
+    proxmox_guest_firewall_rendered_cluster: "{{ lookup('ansible.builtin.template', 'cluster.fw.j2') }}"
+
+- name: Render each guest's <vmid>.fw
+  ansible.builtin.set_fact:
+    proxmox_guest_firewall_rendered_guests: >-
+      {{ proxmox_guest_firewall_rendered_guests | default({})
+         | combine({(_pgf_guest.vmid | string): lookup('ansible.builtin.template', 'guest.fw.j2')}) }}
+  loop: "{{ proxmox_guest_firewall_guests }}"
+  loop_control:
+    loop_var: _pgf_guest
+    label: "{{ _pgf_guest.name }} {{ _pgf_guest.vmid }}"

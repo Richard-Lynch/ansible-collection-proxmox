@@ -1,0 +1,43 @@
+# Copyright: (c) 2026, Richard Lynch
+# GNU General Public License v3.0+ (see https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+---
+namespace: richard_lynch
+name: proxmox
+version: 1.0.0
+readme: README.md
+authors:
+  - Richard Lynch
+description: >-
+  Roles for running Proxmox VE nodes: LXC and VM guests from templates or cloud images, LXC templates, guest firewall rendering, storage layout, vzdump jobs, CI API and SSH access, kernel install, GPU passthrough and Intel VA-API media drivers, and Docker-in-LXC fixes.
+license:
+  - GPL-3.0-or-later
+tags:
+  - proxmox
+  - virtualization
+  - infrastructure
+  - linux
+dependencies:
+  ansible.posix: ">=2.0.0"
+  ansible.utils: ">=5.0.0"
+  community.general: ">=10.0.0"
+  community.proxmox: ">=1.0.0"
+  richard_lynch.common: ">=1.0.0,<2.0.0"
+repository: https://github.com/Richard-Lynch/ansible-collection-proxmox
+documentation: https://github.com/Richard-Lynch/ansible-collection-proxmox/blob/main/README.md
+homepage: https://github.com/Richard-Lynch/ansible-collection-proxmox
+issues: https://github.com/Richard-Lynch/ansible-collection-proxmox/issues
+build_ignore:
+  - .ansible-lint
+  - configured_roles.txt
+  - roles/*/defaults/SKIP
+  - .github
+  - .gitignore
+  - collections.galaxy
+  - devkit.toml
+  - dist
+  - export.manifest
+  - tests/output
+  - roles/*/meta/argument_specs.py
+  - roles/*/molecule
+  - "*.tar.gz"

@@ -1,0 +1,34 @@
+---
+# proxmox_guest_firewall: report, preview or apply the Proxmox firewall for a declared set of
+# guests. The default action is report, which only reads.
+#
+# WHY THE APPLY IS THE DANGEROUS ONE. Proxmox ignores every guest rule while the DATACENTER
+# firewall (cluster.fw [OPTIONS] enable) is off, which is the Proxmox default. So the first
+# apply on such a cluster has to switch it on, and that switch is
+# cluster-wide: every node's pve-firewall starts compiling and loading rules. This role keeps the
+# datacenter policies at ACCEPT (a gate refuses anything else), writes guest files before the
+# switch, and checks 22/8006 on every node plus quorum before and after it, reverting the switch
+# if an AFTER check fails.
+- name: Resolve declared options over their generated defaults
+  ansible.builtin.include_tasks: _resolve_defaults.yml
+
+- name: Refuse a declaration that would be unsafe or inert
+  ansible.builtin.include_tasks: _gates.yml
+
+- name: Render the files this role owns
+  ansible.builtin.include_tasks: _render.yml
+
+- name: Read the live state (report)
+  ansible.builtin.include_tasks: _report.yml
+  when: not (proxmox_guest_firewall_render_only | bool)
+
+- name: Preview what would change
+  ansible.builtin.include_tasks: _preview.yml
+  when: proxmox_guest_firewall_action in ['preview', 'apply']
+
+- name: Apply (writes; cluster-wide on the first run)
+  ansible.builtin.include_tasks: _apply.yml
+  when:
+    - proxmox_guest_firewall_action == 'apply'
+    - proxmox_guest_firewall_apply | bool
+    - not (proxmox_guest_firewall_render_only | bool)

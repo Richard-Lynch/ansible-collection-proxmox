@@ -1,0 +1,86 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/proxmox_vzdump/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate proxmox_vzdump
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Reconcile a cluster-wide nightly vzdump backup job via pvesh
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      proxmox_vzdump_job_tag:
+        description:
+          - Stable tag in the job comment (idempotency key).
+        type: str
+        required: false
+      proxmox_vzdump_comment:
+        description:
+          - Full job comment (contains the tag).
+        type: str
+        required: false
+      proxmox_vzdump_storage:
+        description:
+          - Backup-capable storage (content=backup).
+        type: str
+        required: false
+      proxmox_vzdump_schedule:
+        description:
+          - Backup schedule (systemd calendar / HH:MM).
+        type: str
+        required: false
+      proxmox_vzdump_all:
+        description:
+          - Back up all guests.
+        type: bool
+        required: false
+      proxmox_vzdump_exclude:
+        description:
+          - Comma-separated VMIDs to exclude.
+        type: str
+        required: false
+      proxmox_vzdump_mode:
+        description:
+          - snapshot|suspend|stop.
+        type: str
+        required: false
+      proxmox_vzdump_compress:
+        description:
+          - Compression (zstd/lzo/gzip).
+        type: str
+        required: false
+      proxmox_vzdump_mailnotification:
+        description:
+          - always|failure.
+        type: str
+        required: false
+      proxmox_vzdump_notes_template:
+        description:
+          - PVE note template.
+        type: str
+        required: false
+      proxmox_vzdump_keep_daily:
+        description:
+          - 'Retention: keep-daily.'
+        type: int
+        required: false
+      proxmox_vzdump_keep_weekly:
+        description:
+          - 'Retention: keep-weekly.'
+        type: int
+        required: false
+      proxmox_vzdump_keep_monthly:
+        description:
+          - 'Retention: keep-monthly.'
+        type: int
+        required: false
+      proxmox_vzdump_enabled:
+        description:
+          - Enable the job on create.
+        type: bool
+        required: false
+        default: true

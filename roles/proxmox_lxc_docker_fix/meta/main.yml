@@ -1,0 +1,14 @@
+---
+galaxy_info:
+  namespace: richard_lynch
+  author: Richard Lynch
+  description: >-
+    Let Docker run in an unprivileged LXC on Proxmox VE 8 by writing two raw lxc.* AppArmor lines
+    into the container's config and rebooting the container once when they change.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  platforms:
+    - name: Debian
+      versions: [bookworm]
+  galaxy_tags: [proxmox, lxc, docker, apparmor]
+dependencies: []

@@ -1,0 +1,20 @@
+---
+- name: Show homeassistant_vm_usb
+  ansible.builtin.debug:
+    var: homeassistant_vm_usb
+    verbosity: 1
+- name: Parse USB values into correct format
+  loop: "{{ homeassistant_vm_usb | default({}) | dict2items }}"
+  loop_control:
+    label: "{{ usb_port.key }}"
+    loop_var: usb_port
+  ansible.builtin.set_fact:
+    homeassistant_vm_usb_serialised: >-
+      {{
+        homeassistant_vm_usb_serialised | default({})
+        | combine({usb_port.key: usb_port.value.items() | map('join', '=') | join(',')})
+      }}
+- name: Show homeassistant_vm_usb_serialised
+  ansible.builtin.debug:
+    var: homeassistant_vm_usb_serialised
+    verbosity: 1

@@ -1,0 +1,27 @@
+---
+# GENERATED from roles/deployment_proxmox_lxc/meta/argument_specs.py — DO NOT EDIT.
+# Regenerate with: venv/bin/python tools/argspec/cli.py x generate deployment_proxmox_lxc
+#
+# These are the constraints Ansible's role-argspec validator CANNOT enforce. It handles
+# type/required/choices/no_log, but has no numeric-range, length or pattern checking, so
+# without this file those declarations would be decorative.
+#
+# Include from the role's entrypoints:  - ansible.builtin.include_tasks: _argspec_guards.yml
+
+- name: "GUARD (generated) — utils_verify_connection_delay must be >= 1; <= 60"
+  ansible.builtin.assert:
+    that:
+      - "utils_verify_connection_delay | int >= 1"
+      - "utils_verify_connection_delay | int <= 60"
+    fail_msg: "utils_verify_connection_delay violates a constraint declared in meta/argument_specs.py: must be >= 1; <= 60. Got: {{ utils_verify_connection_delay | default('(unset)') }}"
+    quiet: true
+  when: utils_verify_connection_delay is defined
+
+- name: "GUARD (generated) — utils_verify_connection_retries must be >= 1; <= 60"
+  ansible.builtin.assert:
+    that:
+      - "utils_verify_connection_retries | int >= 1"
+      - "utils_verify_connection_retries | int <= 60"
+    fail_msg: "utils_verify_connection_retries violates a constraint declared in meta/argument_specs.py: must be >= 1; <= 60. Got: {{ utils_verify_connection_retries | default('(unset)') }}"
+    quiet: true
+  when: utils_verify_connection_retries is defined

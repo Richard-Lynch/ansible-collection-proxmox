@@ -1,0 +1,15 @@
+---
+- name: Set defaults
+  ansible.builtin.set_fact:
+    truenas_vm_iso_url: "{{ truenas_vm_iso_url | default(truenas_vm_iso_url__default) }}"
+    truenas_vm_storage: "{{ truenas_vm_storage | default(truenas_vm_storage__default) }}"
+    truenas_vm_disk_size: "{{ truenas_vm_disk_size | default(truenas_vm_disk_size__default) }}"
+    truenas_vm_memory: "{{ truenas_vm_memory | default(truenas_vm_memory__default) }}"
+    truenas_vm_cores: "{{ truenas_vm_cores | default(truenas_vm_cores__default) }}"
+
+- name: Show truenas_vm_storage
+  ansible.builtin.debug:
+    var: truenas_vm_storage
+- name: Show truenas_vm_disk_size
+  ansible.builtin.debug:
+    var: truenas_vm_disk_size

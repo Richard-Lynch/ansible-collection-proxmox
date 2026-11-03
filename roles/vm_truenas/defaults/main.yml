@@ -1,0 +1,15 @@
+---
+# AUTO-GENERATED defaults file — DO NOT EDIT.
+#
+# Source of truth: roles/vm_truenas/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate vm_truenas
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+# Entrypoint:      main
+
+truenas_vm_storage__default: local-lvm
+truenas_vm_disk_size__default: 64
+truenas_vm_memory__default: 16384
+truenas_vm_cores__default: 4

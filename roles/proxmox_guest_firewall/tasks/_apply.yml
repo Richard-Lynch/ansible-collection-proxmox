@@ -1,0 +1,139 @@
+---
+# WRITES. Reached only with action=apply AND proxmox_guest_firewall_apply=true (_gates.yml).
+# Order is the safety: guest files first (inert while the datacenter is off), NIC flags next, the
+# datacenter switch LAST, then the same checks again. If a node stops answering 22/8006 after the
+# switch, the rescue turns the datacenter firewall back off at once.
+
+# ---- BEFORE: the cluster must be healthy enough to survive a cluster-wide change ----------------
+- name: BEFORE - every node answers 22 and 8006 from the controller
+  ansible.builtin.assert:
+    that:
+      - (proxmox_guest_firewall_live.node_ports | dict2items | selectattr('value', 'equalto', 'CLOSED') | list | length) == 0
+    fail_msg: "BEFORE check failed, nothing written: {{ proxmox_guest_firewall_live.node_ports }}"
+    quiet: true
+
+- name: BEFORE - the cluster is quorate
+  ansible.builtin.assert:
+    that: [proxmox_guest_firewall_live.quorate | bool]
+    fail_msg: "BEFORE check failed, nothing written: pvecm status is not quorate."
+    quiet: true
+
+# cluster.fw is written WHOLE. A section in the live file this role does not render (rules,
+# aliases, security groups, another IPSet) would be deleted by the write; refuse instead.
+- name: BEFORE - the live cluster.fw holds nothing this role would delete
+  ansible.builtin.assert:
+    that:
+      - (_pgf_foreign | length) == 0
+    fail_msg: >-
+      The live cluster.fw carries sections this role does not own: {{ _pgf_foreign }}. Declare them
+      or move them before applying; the write would delete them.
+    quiet: true
+  vars:
+    _pgf_foreign: >-
+      {{ (proxmox_guest_firewall_current['cluster.fw'] | default('')).splitlines()
+         | map('trim') | select('match', '^\[') | map('upper')
+         | difference(proxmox_guest_firewall_rendered_cluster.splitlines() | map('trim')
+                      | select('match', '^\[') | map('upper') | list) }}
+
+# ---- WRITE ---------------------------------------------------------------------------------------
+# /etc/pve is pmxcfs. ansible.builtin.copy cannot write there: pmxcfs refuses its chmod, with or
+# without unsafe_writes. _write_pmxcfs.yml writes the way Proxmox itself does and reads every file
+# back.
+- name: Write each guest's <vmid>.fw (inert until the datacenter switch)
+  ansible.builtin.include_tasks: _write_pmxcfs.yml
+  vars:
+    _pgf_write_path: "{{ proxmox_guest_firewall_fw_dir }}/{{ item.key }}.fw"
+    _pgf_write_content: "{{ item.value }}"
+  loop: "{{ proxmox_guest_firewall_rendered_guests | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}.fw"
+
+- name: Turn on firewall=1 for each NIC of a declared guest that lacks it
+  ansible.builtin.command:
+    argv:
+      - pvesh
+      - set
+      - "/nodes/{{ _g.node }}/{{ _g.type }}/{{ _g.vmid }}/config"
+      - "--{{ item.1.key }}"
+      - "{{ item.1.value | regex_replace(',?firewall=0', '') }},firewall=1"
+  loop: "{{ _pgf_nic_pairs_json | from_json }}"
+  loop_control:
+    label: "{{ item.0 }} {{ item.1.key }}"
+  vars:
+    _g: "{{ proxmox_guest_firewall_guests | selectattr('name', 'equalto', item.0) | first }}"
+    # Built as JSON text: a {% %} block renders to a STRING, and loop needs a list.
+    _pgf_nic_pairs_json: >-
+      {% set out = [] %}
+      {% for name, nics in proxmox_guest_firewall_live.guest_nics.items() %}
+      {%   for k, v in nics.items() if 'firewall=1' not in v %}
+      {%     set _ = out.append([name, {'key': k, 'value': v}]) %}
+      {%   endfor %}
+      {% endfor %}
+      {{ out | to_json }}
+  changed_when: true
+
+- name: Say the datacenter switch was NOT made (guest files are in place and inert)
+  ansible.builtin.debug:
+    msg: >-
+      Guest files and NIC flags are written; they filter NOTHING until the datacenter firewall is on.
+      That switch is CLUSTER-WIDE and needs its own key: proxmox_guest_firewall_datacenter_confirm=true.
+  when: not (proxmox_guest_firewall_datacenter_confirm | bool)
+
+- name: Switch the datacenter firewall on (CLUSTER-WIDE), with an immediate revert on failure
+  when: proxmox_guest_firewall_datacenter_confirm | bool
+  block:
+    - name: Write cluster.fw (pmxcfs, see the guest-file write above)
+      ansible.builtin.include_tasks: _write_pmxcfs.yml
+      vars:
+        _pgf_write_path: "{{ proxmox_guest_firewall_fw_dir }}/cluster.fw"
+        _pgf_write_content: "{{ proxmox_guest_firewall_rendered_cluster }}"
+
+    - name: Let pve-firewall pick it up (it compiles on a 10 s cycle)
+      ansible.builtin.pause:
+        seconds: 20
+
+    - name: AFTER - every node still answers 22 and 8006 from the controller
+      ansible.builtin.wait_for:
+        host: "{{ item.0.address }}"
+        port: "{{ item.1 }}"
+        timeout: 10
+      delegate_to: localhost
+      loop: "{{ proxmox_guest_firewall_nodes | product(proxmox_guest_firewall_management_ports) | list }}"
+      loop_control:
+        label: "{{ item.0.name }}:{{ item.1 }}"
+
+    - name: AFTER - the cluster is still quorate
+      ansible.builtin.command:
+        argv: [pvecm, status]
+      register: _pgf_pvecm_after
+      changed_when: false
+      failed_when: _pgf_pvecm_after.stdout is not search('(?m)^Quorate:\s+Yes')
+
+    - name: AFTER - the datacenter reads back enabled
+      ansible.builtin.command:
+        argv: [pvesh, get, /cluster/firewall/options, --output-format, json]
+      register: _pgf_dc_after
+      changed_when: false
+      failed_when: ((_pgf_dc_after.stdout | from_json).enable | default(0) | int) != 1
+  rescue:
+    - name: REVERT - switch the datacenter firewall back off
+      ansible.builtin.command:
+        argv: [pvesh, set, /cluster/firewall/options, --enable, "0"]
+      changed_when: true
+
+    - name: Re-raise the failure
+      ansible.builtin.fail:
+        msg: >-
+          The cluster-wide switch failed its AFTER check ({{ ansible_failed_task.name }}) and the
+          datacenter firewall was switched back OFF. Guest files are in place and inert.
+
+- name: AFTER - each guest reads back its firewall enabled
+  when: proxmox_guest_firewall_datacenter_confirm | bool
+  ansible.builtin.command:
+    argv: [pvesh, get, "/nodes/{{ item.node }}/{{ item.type }}/{{ item.vmid }}/firewall/options", --output-format, json]
+  register: _pgf_guest_after
+  changed_when: false
+  failed_when: ((_pgf_guest_after.stdout | from_json).enable | default(0) | int) != 1
+  loop: "{{ proxmox_guest_firewall_guests }}"
+  loop_control:
+    label: "{{ item.name }}"

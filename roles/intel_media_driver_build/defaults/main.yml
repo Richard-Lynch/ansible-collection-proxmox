@@ -1,0 +1,77 @@
+---
+# AUTO-GENERATED defaults file — DO NOT EDIT.
+#
+# Source of truth: roles/intel_media_driver_build/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate intel_media_driver_build
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+# Entrypoint:      main
+
+# false (default) probes and reports, building nothing. true builds,
+# installs alongside, and verifies.
+imd_apply__default: false
+
+# Docker container inside that guest whose driver dir is targeted.
+imd_container__default: jellyfin
+
+# GmmLib tag. media-driver requires a compatible GmmLib; see
+# github.com/intel/media-driver/wiki/Compatibility-with-GmmLib
+imd_gmmlib_ref__default: intel-gmmlib-22.10.1
+
+# libva tag to build against. Matched to the version jellyfin-ffmpeg bundles
+# (libva.so.2.2200.0 = 2.22), so the driver links against the same API the
+# runtime provides.
+imd_libva_ref__default: 2.22.0
+
+# Where the BUNDLED driver lives. READ ONLY — never modified.
+imd_driver_dir__default: /usr/lib/jellyfin-ffmpeg/lib/dri
+
+# Where the PATCHED driver is installed — on the GUEST filesystem, NOT inside
+# the container. In the upstream jellyfin image
+# /usr/lib/jellyfin-ffmpeg/lib/dri is in the WRITABLE LAYER (only the
+# configured volumes are mounts). Installing there would be destroyed by the very
+# container recreate needed to set LIBVA_DRIVERS_PATH — leaving libva unable
+# to find any driver at all, since that variable replaces the search path.
+# A guest path bind-mounted via compose survives recreation and makes install
+# and enable one atomic change.
+imd_install_dir__default: /opt/ihd-patched
+
+# Where gmmlib must appear INSIDE the container. It has to be on the linker
+# path, not merely beside the driver: iHD links libigdgmm.so.12 dynamically
+# and dlopen fails with 'cannot open shared object file' otherwise.
+imd_gmmlib_target__default: /usr/lib/x86_64-linux-gnu/libigdgmm.so.12
+
+# libva location, used as LD_LIBRARY_PATH for both probes.
+imd_ffmpeg_lib__default: /usr/lib/jellyfin-ffmpeg/lib
+
+# vainfo binary used for the before/after probes.
+imd_vainfo__default: /usr/lib/jellyfin-ffmpeg/vainfo
+
+# ffmpeg binary used for the real-encode verification.
+imd_ffmpeg__default: /usr/lib/jellyfin-ffmpeg/ffmpeg
+
+# Duration of each verification encode. Short on purpose: this proves the
+# engine works, it is not a benchmark.
+imd_test_seconds__default: 3
+
+# Build context staging dir on the PVE host.
+imd_build_dir__default: /tmp/ansible-ihd-build
+
+# Build context dir inside the guest.
+imd_guest_build_dir__default: /tmp/ihd-build
+
+# Where the built .so is staged inside the guest before install.
+imd_guest_stage_dir__default: /tmp/ihd-artifact
+
+# Tag for the throwaway build image.
+imd_image_tag__default: ansible/ihd-smallbar:latest
+
+# Where PCI devices are enumerated. Overridable ONLY so molecule can run the
+# real role against a fixture tree; production never sets it.
+imd_sysfs_base__default: /sys/bus/pci/devices
+
+# Seconds allowed for the build. media-driver is large; 10-30 minutes is
+# normal for a full driver build.
+imd_build_timeout__default: 3600

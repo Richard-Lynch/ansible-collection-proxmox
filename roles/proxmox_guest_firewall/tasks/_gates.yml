@@ -1,0 +1,122 @@
+---
+# Pure refusals: no read of the cluster, so the molecule scenario can feed each bad declaration in
+# and watch the gate fire. Every gate here stops something that would otherwise be SILENT.
+- name: HARD GATE - apply needs its second key
+  ansible.builtin.assert:
+    that:
+      - proxmox_guest_firewall_action != 'apply' or (proxmox_guest_firewall_apply | bool)
+    fail_msg: >-
+      proxmox_guest_firewall_action=apply without proxmox_guest_firewall_apply=true. The first apply
+      turns the DATACENTER firewall on for EVERY node in the cluster; it needs both keys.
+    quiet: true
+
+# Guest rules do nothing while the datacenter firewall is off, so a declaration with enable 0
+# would render, "apply" and filter nothing: a firewall that only looks like one.
+- name: HARD GATE - the datacenter must be enabled or the guest rules are inert
+  ansible.builtin.assert:
+    that:
+      - (proxmox_guest_firewall_cluster_options.enable | default(0) | int) == 1
+    fail_msg: >-
+      cluster options enable={{ proxmox_guest_firewall_cluster_options.enable | default('unset') }}.
+      Proxmox honours guest rules only with the datacenter firewall on, so these rules would be inert.
+    quiet: true
+
+# This role writes cluster.fw with NO [RULES] section, so a DROP/REJECT datacenter policy would
+# filter every node with nothing allowing 22/8006 except Proxmox's implicit local_network rules.
+# That is a cluster lockout bet on auto-detection; refuse it rather than take it.
+- name: HARD GATE - the datacenter policies must stay ACCEPT (this role owns no node rules)
+  ansible.builtin.assert:
+    that:
+      - (proxmox_guest_firewall_cluster_options.policy_in | default('DROP') | upper) == 'ACCEPT'
+      - (proxmox_guest_firewall_cluster_options.policy_out | default('ACCEPT') | upper) == 'ACCEPT'
+    fail_msg: >-
+      cluster policy_in/policy_out must be ACCEPT (got
+      {{ proxmox_guest_firewall_cluster_options.policy_in | default('unset (Proxmox default DROP)') }}/
+      {{ proxmox_guest_firewall_cluster_options.policy_out | default('unset') }}). This role manages
+      guest rules only; a DROP datacenter policy would filter every node's 22/8006.
+    quiet: true
+
+- name: HARD GATE - every IPSet entry is an address or CIDR, never a name
+  ansible.builtin.assert:
+    that:
+      - (_pgf_bad_ipset_entries | length) == 0
+    fail_msg: "IPSet entries that are not an IP or CIDR: {{ _pgf_bad_ipset_entries }}"
+    quiet: true
+  vars:
+    _pgf_bad_ipset_entries: >-
+      {{ proxmox_guest_firewall_ipsets | dict2items | subelements('value')
+         | map(attribute='1') | map(attribute='cidr') | map('string') | list
+         | zip(proxmox_guest_firewall_ipsets | dict2items | subelements('value')
+               | map(attribute='1') | map(attribute='cidr') | map('string') | map('ansible.utils.ipaddr') | list)
+         | selectattr('1', 'equalto', false) | map(attribute='0') | list }}
+
+- name: HARD GATE - every guest is well formed
+  ansible.builtin.assert:
+    that:
+      - item.name | default('') | length > 0
+      - (item.vmid | default(0) | int) > 0
+      - item.node | default('') | length > 0
+      - item.type | default('') in ['lxc', 'qemu']
+      - (item.policy_in | default('DROP') | upper) in ['ACCEPT', 'DROP', 'REJECT']
+      - (item.policy_out | default('DROP') | upper) in ['ACCEPT', 'DROP', 'REJECT']
+      - item.rules is defined and (item.rules | length) > 0
+    fail_msg: >-
+      guest {{ item.name | default('?') }}: needs name, vmid > 0, node, type lxc|qemu, policies from
+      ACCEPT/DROP/REJECT and a non-empty rules list (got vmid={{ item.vmid | default('?') }}
+      type={{ item.type | default('?') }}).
+    quiet: true
+  loop: "{{ proxmox_guest_firewall_guests }}"
+  loop_control:
+    label: "{{ item.name | default('?') }}"
+
+- name: HARD GATE - every rule is well formed and justified
+  ansible.builtin.assert:
+    that:
+      - item.1.dir | default('') in ['in', 'out']
+      - (item.1.action | default('ACCEPT') | upper) in ['ACCEPT', 'DROP', 'REJECT']
+      - item.1.comment | default('') | length > 0
+      - "'#' not in (item.1.comment | default(''))"
+      - >-
+        (item.1.source | default('') | length == 0)
+        or (item.1.source.startswith('+') and item.1.source[1:] in proxmox_guest_firewall_ipsets)
+        or ((item.1.source | ansible.utils.ipaddr) is string)
+      - >-
+        (item.1.dest | default('') | length == 0)
+        or (item.1.dest.startswith('+') and item.1.dest[1:] in proxmox_guest_firewall_ipsets)
+        or ((item.1.dest | ansible.utils.ipaddr) is string)
+    fail_msg: >-
+      {{ item.0.name }} rule {{ item.1 }}: needs dir in|out, an ACCEPT/DROP/REJECT action, a comment
+      with no '#', and a source/dest that is an IP, a CIDR or +<declared ipset>. An unknown +ipset
+      would make Proxmox reject the whole file.
+    quiet: true
+  loop: "{{ proxmox_guest_firewall_guests | subelements('rules') }}"
+  loop_control:
+    label: "{{ item.0.name }}: {{ item.1.comment | default('?') }}"
+
+# policy_in DROP with no SSH rule cuts Ansible off from the guest it just firewalled, and the only
+# road back is a console.
+- name: HARD GATE - every DROP-by-default guest keeps SSH from +management
+  ansible.builtin.assert:
+    that:
+      - >-
+        (item.policy_in | default('DROP') | upper) == 'ACCEPT'
+        or (item.rules | selectattr('dir', 'equalto', 'in')
+             | selectattr('source', 'defined') | selectattr('source', 'equalto', '+management')
+             | selectattr('dport', 'defined') | map(attribute='dport') | map('string')
+             | select('equalto', '22') | list | length) > 0
+    fail_msg: >-
+      guest {{ item.name }} drops inbound by default and has no `in ACCEPT -source +management
+      -dport 22` rule. Applying it would lock Ansible out of the guest.
+    quiet: true
+  loop: "{{ proxmox_guest_firewall_guests }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: HARD GATE - no vmid is declared twice
+  ansible.builtin.assert:
+    that:
+      - >-
+        (proxmox_guest_firewall_guests | map(attribute='vmid') | map('int') | list | unique | length)
+        == (proxmox_guest_firewall_guests | length)
+    fail_msg: "Two guests share a vmid: {{ proxmox_guest_firewall_guests | map(attribute='vmid') | list }}"
+    quiet: true

@@ -1,0 +1,15 @@
+---
+- name: Apply roles defaults
+  ansible.builtin.include_tasks: set_vars.yml
+
+- name: Ensure VM is cloned from tempate
+  ansible.builtin.include_tasks: clone.yml
+
+- name: Verify the SSH connection work can be established
+  ansible.builtin.include_role:
+    name: richard_lynch.common.utils_verify_connection
+  vars:
+    utils_verify_connection_hostname: "{{ deployment_proxmox_vm_machine.name }}"
+
+- name: Install Proxmox QEMU guest agent
+  ansible.builtin.include_tasks: install_guest_agent.yml

@@ -1,0 +1,33 @@
+---
+# Offline: exercises the REAL role against a fake lspci and a fixture /etc/kernel/cmdline, with
+# apply pointed at a scratch tree. No PVE, no GPU, no root, no reboot.
+#
+# Coverage: better than the "parse/check only" tier usual for Proxmox roles. The cmdline union, the two hard gates and the backup/read-back
+# path are all real logic that does not need a PVE API, so they are genuinely converged and
+# asserted. What is NOT covered, honestly: proxmox-boot-tool refresh (stubbed — it needs a real EFI
+# setup), apt installation, and whether an ACS override actually splits an IOMMU group, which is a
+# property of the hardware and can only be learned by rebooting the real host.
+dependency: { name: galaxy }
+driver: { name: default }
+platforms: [{ name: localhost }]
+provisioner:
+  name: ansible
+  inventory: { host_vars: { localhost: { ansible_connection: local } } }
+  playbooks: { converge: converge.yml, verify: verify.yml }
+  env:
+    # Molecule runs from inside the role dir, so the repo's roles/ is not on the search path and
+    # include_role cannot find the role under test. Setting it here is what lets converge.yml call
+    # the REAL role rather than reproducing its effects by hand — the latter is a tautological
+    # test (it asserts a copy against itself and stays green through a real
+    # regression).
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../"
+verifier: { name: ansible }
+scenario:
+  # No idempotence step: converge stages fixtures (deliberately non-idempotent, so a stale fixture
+  # can never make a broken role pass) and runs the role twice with different inputs to compare
+  # dry-run against apply. The role's own idempotence — applying the same tokens twice is a no-op —
+  # is asserted explicitly in verify.yml instead, which is a stronger check than molecule's.
+  test_sequence:
+    - syntax
+    - converge
+    - verify

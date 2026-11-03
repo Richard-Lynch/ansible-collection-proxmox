@@ -1,0 +1,362 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/vm_homeassistant/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate vm_homeassistant
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Sets up a home assistant VM
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      homeassistant_vm_iso_url:
+        description:
+          - The URL to the `.qcow2.xz` file to be installed as the VM
+          - 'example: https://github.com/home-assistant/operating-system/releases/download/15.2/haos_ova-15.2.qcow2.xz'
+        type: str
+        required: true
+      homeassistant_vm_id:
+        description:
+          - The Proxmox VMID for the new VM
+        type: int
+        required: true
+      homeassistant_vm_vlan:
+        description:
+          - The VLAN config for the primary network connection of the VM
+          - Normally one entry of a VLAN map kept in the inventory
+        type: dict
+        required: true
+        options:
+          id:
+            type: int
+            required: true
+          name:
+            type: str
+            required: true
+          domain_name:
+            description:
+              - FQDN
+            type: str
+            required: true
+          gateway:
+            description:
+              - The VLAN gateway address, e.g. `192.0.2.1`
+            type: str
+            required: true
+          dns:
+            description:
+              - The VLAN DNS server address, e.g. `192.0.2.53`
+            type: str
+            required: false
+          base:
+            description:
+              - The VLAN network address, e.g. `192.0.2.0`
+            type: str
+            required: true
+          cidr:
+            type: int
+            required: true
+      homeassistant_vm_startup_order:
+        description:
+          - The order Proxmox should start this container relative to the others
+          - Will default to the VLAN ID
+        type: int
+        required: false
+      homeassistant_vm_name:
+        description:
+          - The hostname of the VM
+        type: str
+        required: false
+        default: homeassistant
+      homeassistant_vm_bridge:
+        type: str
+        required: false
+        default: vmbr0
+      homeassistant_vm_usb:
+        description: https://docs.ansible.com/ansible/latest/collections/community/general/proxmox_kvm_module.html#parameter-usb
+        type: dict
+        required: false
+        options:
+          usb0:
+            description: USB devices which should be attached to the VM
+            type: dict
+            required: false
+            options:
+              host:
+                description:
+                  - Host is either spice or the USB id/port.
+                  - host=value | spice
+                type: str
+                required: true
+              mapping:
+                description:
+                  - The mapped USB device name
+                  - mapping=value
+                type: str
+                required: false
+              usb3:
+                description:
+                  - Enables USB 3 support
+                  - usb3=1|0
+                type: int
+                required: false
+                choices:
+                  - 0
+                  - 1
+          usb1:
+            description: USB devices which should be attached to the VM
+            type: dict
+            required: false
+            options:
+              host:
+                description:
+                  - Host is either spice or the USB id/port.
+                  - host=value | spice
+                type: str
+                required: true
+              mapping:
+                description:
+                  - The mapped USB device name
+                  - mapping=value
+                type: str
+                required: false
+              usb3:
+                description:
+                  - Enables USB 3 support
+                  - usb3=1|0
+                type: int
+                required: false
+                choices:
+                  - 0
+                  - 1
+          usb2:
+            description: USB devices which should be attached to the VM
+            type: dict
+            required: false
+            options:
+              host:
+                description:
+                  - Host is either spice or the USB id/port.
+                  - host=value | spice
+                type: str
+                required: true
+              mapping:
+                description:
+                  - The mapped USB device name
+                  - mapping=value
+                type: str
+                required: false
+              usb3:
+                description:
+                  - Enables USB 3 support
+                  - usb3=1|0
+                type: int
+                required: false
+                choices:
+                  - 0
+                  - 1
+          usb3:
+            description: USB devices which should be attached to the VM
+            type: dict
+            required: false
+            options:
+              host:
+                description:
+                  - Host is either spice or the USB id/port.
+                  - host=value | spice
+                type: str
+                required: true
+              mapping:
+                description:
+                  - The mapped USB device name
+                  - mapping=value
+                type: str
+                required: false
+              usb3:
+                description:
+                  - Enables USB 3 support
+                  - usb3=1|0
+                type: int
+                required: false
+                choices:
+                  - 0
+                  - 1
+          usb4:
+            description: USB devices which should be attached to the VM
+            type: dict
+            required: false
+            options:
+              host:
+                description:
+                  - Host is either spice or the USB id/port.
+                  - host=value | spice
+                type: str
+                required: true
+              mapping:
+                description:
+                  - The mapped USB device name
+                  - mapping=value
+                type: str
+                required: false
+              usb3:
+                description:
+                  - Enables USB 3 support
+                  - usb3=1|0
+                type: int
+                required: false
+                choices:
+                  - 0
+                  - 1
+          usb5:
+            description: USB devices which should be attached to the VM
+            type: dict
+            required: false
+            options:
+              host:
+                description:
+                  - Host is either spice or the USB id/port.
+                  - host=value | spice
+                type: str
+                required: true
+              mapping:
+                description:
+                  - The mapped USB device name
+                  - mapping=value
+                type: str
+                required: false
+              usb3:
+                description:
+                  - Enables USB 3 support
+                  - usb3=1|0
+                type: int
+                required: false
+                choices:
+                  - 0
+                  - 1
+          usb6:
+            description: USB devices which should be attached to the VM
+            type: dict
+            required: false
+            options:
+              host:
+                description:
+                  - Host is either spice or the USB id/port.
+                  - host=value | spice
+                type: str
+                required: true
+              mapping:
+                description:
+                  - The mapped USB device name
+                  - mapping=value
+                type: str
+                required: false
+              usb3:
+                description:
+                  - Enables USB 3 support
+                  - usb3=1|0
+                type: int
+                required: false
+                choices:
+                  - 0
+                  - 1
+          usb7:
+            description: USB devices which should be attached to the VM
+            type: dict
+            required: false
+            options:
+              host:
+                description:
+                  - Host is either spice or the USB id/port.
+                  - host=value | spice
+                type: str
+                required: true
+              mapping:
+                description:
+                  - The mapped USB device name
+                  - mapping=value
+                type: str
+                required: false
+              usb3:
+                description:
+                  - Enables USB 3 support
+                  - usb3=1|0
+                type: int
+                required: false
+                choices:
+                  - 0
+                  - 1
+          usb8:
+            description: USB devices which should be attached to the VM
+            type: dict
+            required: false
+            options:
+              host:
+                description:
+                  - Host is either spice or the USB id/port.
+                  - host=value | spice
+                type: str
+                required: true
+              mapping:
+                description:
+                  - The mapped USB device name
+                  - mapping=value
+                type: str
+                required: false
+              usb3:
+                description:
+                  - Enables USB 3 support
+                  - usb3=1|0
+                type: int
+                required: false
+                choices:
+                  - 0
+                  - 1
+          usb9:
+            description: USB devices which should be attached to the VM
+            type: dict
+            required: false
+            options:
+              host:
+                description:
+                  - Host is either spice or the USB id/port.
+                  - host=value | spice
+                type: str
+                required: true
+              mapping:
+                description:
+                  - The mapped USB device name
+                  - mapping=value
+                type: str
+                required: false
+              usb3:
+                description:
+                  - Enables USB 3 support
+                  - usb3=1|0
+                type: int
+                required: false
+                choices:
+                  - 0
+                  - 1
+      homeassistant_vm_cores:
+        type: int
+        required: false
+        default: 4
+      homeassistant_vm_memory:
+        type: int
+        required: false
+        default: 8192
+      homeassistant_vm_storage:
+        type: str
+        required: false
+        default: local-lvm
+        choices:
+          - local
+          - local-lvm
+      homeassistant_vm_disk_size:
+        type: str
+        required: false
+        default: 64G

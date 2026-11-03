@@ -1,0 +1,252 @@
+---
+# Asserts on what the REAL role actually did to the fixture tree — not on a re-derivation of its
+# logic. Break the union, the gates, or the backup path and these go red.
+
+- name: Verify proxmox_gpu_passthrough
+  hosts: localhost
+  gather_facts: false
+  vars:
+    fake_root: /tmp/molecule-gpu-passthrough
+    _cmdline: /tmp/molecule-gpu-passthrough/etc/kernel/cmdline
+  tasks:
+    - name: Read the captured state
+      ansible.builtin.slurp: { src: "{{ fake_root }}/{{ item }}" }
+      loop: [captured.json, captured2.json, refuse.json, captured_grub.json]
+      register: _raw
+
+    - name: Decode
+      ansible.builtin.set_fact:
+        c: "{{ _raw.results[0].content | b64decode | from_json }}"
+        c2: "{{ _raw.results[1].content | b64decode | from_json }}"
+        refuse: "{{ _raw.results[2].content | b64decode | from_json }}"
+        g: "{{ _raw.results[3].content | b64decode | from_json }}"
+
+    # --- generate-don't-apply ---------------------------------------------------------------------
+    - name: The DRY RUN wrote nothing
+      # The single most important property of the role: a default run must be safe to run against a
+      # production host at any time. If this ever regresses, a "just show me the diff" run would be
+      # silently editing the boot configuration of a live hypervisor.
+      ansible.builtin.assert:
+        that:
+          - "'pcie_acs_override' not in c.after_dry"
+          - c.after_dry == 'BOOT_IMAGE=/boot/vmlinuz-6.8.12-4-pve root=/dev/mapper/pve-root ro iommu=pt quiet intel_iommu=on'
+        fail_msg: "Dry run MODIFIED the cmdline: {{ c.after_dry }}"
+        quiet: true
+
+    # --- the union, not a rewrite -----------------------------------------------------------------
+    - name: Apply ADDED the ACS token and PRESERVED every pre-existing token
+      # A rewrite-from-template would produce a valid-looking cmdline missing root= — and a host
+      # that does not boot. Each original token is asserted individually so a partial loss cannot
+      # hide behind a substring match on the whole line.
+      vars:
+        _after: "{{ c.after_apply }}"
+      ansible.builtin.assert:
+        that:
+          - "'pcie_acs_override=downstream,multifunction' in _after"
+          - "'BOOT_IMAGE=/boot/vmlinuz-6.8.12-4-pve' in _after"
+          - "'root=/dev/mapper/pve-root' in _after"
+          - "'ro' in _after.split()"
+          - "'iommu=pt' in _after"
+          - "'quiet' in _after"
+          - "'intel_iommu=on' in _after"
+        fail_msg: "Apply did not preserve every pre-existing token: {{ _after }}"
+        quiet: true
+
+    - name: The original token ORDER was preserved and the new token appended at the end
+      # `| union()` — the obvious implementation — is set-like and reorders, producing lines like
+      # "ro iommu=pt BOOT_IMAGE=... root=...". The kernel accepts that, so no functional test would
+      # catch it; but a scrambled boot line on a production hypervisor is alarming to read and
+      # makes before/after diffs useless. Asserted as an exact string so any reordering fails.
+      ansible.builtin.assert:
+        that:
+          - c.after_apply == (c.after_dry ~ ' pcie_acs_override=downstream,multifunction')
+        fail_msg: >-
+          Token order was not preserved.
+          before: {{ c.after_dry }}
+          after:  {{ c.after_apply }}
+        quiet: true
+
+    - name: No token was duplicated
+      # The append-if-missing filter should never re-add a present token, but this is the guard
+      # that a future switch to naive concatenation (or a second apply) cannot silently double one.
+      vars:
+        _toks: "{{ c.after_apply.split() }}"
+      ansible.builtin.assert:
+        that:
+          - _toks | length == (_toks | unique | length)
+        fail_msg: "Duplicate tokens in cmdline: {{ _toks }}"
+        quiet: true
+
+    # --- idempotence ------------------------------------------------------------------------------
+    - name: A second apply is a no-op
+      ansible.builtin.assert:
+        that:
+          - (c.changed_flag_apply | string | bool) is true
+          - (c2.changed_flag_reapply | string | bool) is false
+        fail_msg: >-
+          Role is not idempotent — first apply changed={{ c.changed_flag_apply }},
+          second apply changed={{ c2.changed_flag_reapply }} (expected true then false).
+        quiet: true
+
+    # --- rollback path ----------------------------------------------------------------------------
+    - name: A timestamped backup of the ORIGINAL cmdline exists
+      ansible.builtin.find:
+        paths: "{{ fake_root }}/etc/kernel"
+        patterns: "cmdline.bak-*"
+      register: _backups
+
+    - name: Exactly one backup, and it holds the pre-change content
+      # "Exactly one" matters: a second apply must not overwrite the backup with an
+      # already-modified cmdline, which would destroy the only route back to the original.
+      vars:
+        _b: "{{ _backups.files | map(attribute='path') | list }}"
+      ansible.builtin.assert:
+        that:
+          - _b | length == 1
+        fail_msg: "Expected exactly one cmdline backup, found: {{ _b }}"
+        quiet: true
+
+    - name: Read the backup
+      ansible.builtin.slurp: { src: "{{ _backups.files[0].path }}" }
+      register: _backup_content
+
+    - name: The backup restores the ORIGINAL cmdline, not the modified one
+      # This is the rollback contract. If the backup contained the post-change line, the documented
+      # recovery command would restore the very state we are trying to undo.
+      vars:
+        _orig: "{{ _backup_content.content | b64decode | trim }}"
+      ansible.builtin.assert:
+        that:
+          - "'pcie_acs_override' not in _orig"
+          - "'root=/dev/mapper/pve-root' in _orig"
+        fail_msg: "Backup does not hold the original cmdline: {{ _orig }}"
+        quiet: true
+
+    # --- bootloader refresh ------------------------------------------------------------------------
+    - name: proxmox-boot-tool refresh was actually invoked
+      # Without it the file changes but the EFI entries keep the old cmdline — the change silently
+      # never takes effect, which would look exactly like "the ACS override did not work".
+      ansible.builtin.slurp: { src: "{{ fake_root }}/boot-tool.log" }
+      register: _boot_log
+
+    - name: The refresh log shows exactly one refresh (from the applying run only)
+      vars:
+        _lines: "{{ (_boot_log.content | b64decode).strip().split('\n') | select('search', 'refresh') | list }}"
+      ansible.builtin.assert:
+        that:
+          - _lines | length == 1
+        fail_msg: >-
+          Expected one 'refresh' call (the first apply); got {{ _lines | length }}: {{ _lines }}.
+          A dry run or a no-op re-apply must not refresh the bootloader.
+        quiet: true
+
+    # --- the GRUB path --------------------------------------------------------------------------------
+    - name: GRUB was detected and the right file/command chosen
+      # A GRUB host has no /etc/kernel/cmdline, so this is a primary path — not a fallback.
+      ansible.builtin.assert:
+        that:
+          - g.bootloader == 'grub'
+          - g.target_file is search('etc/default/grub$')
+          - g.refresh_cmd == 'update-grub'
+        fail_msg: >-
+          Wrong bootloader branch: bootloader={{ g.bootloader }},
+          target={{ g.target_file }}, refresh={{ g.refresh_cmd }}
+        quiet: true
+
+    - name: The ACS token was added INSIDE the quoted assignment, preserving existing tokens
+      # The failure this guards against is severe and silent: appending after the closing quote, or
+      # writing the raw cmdline over the file, produces a grub config that either drops every other
+      # boot parameter or is not valid shell. Either way the host may not boot.
+      ansible.builtin.assert:
+        that:
+          - 'g.grub_file is search(''GRUB_CMDLINE_LINUX_DEFAULT="iommu=pt quiet intel_iommu=on pcie_acs_override=downstream,multifunction"'')'
+        fail_msg: "GRUB_CMDLINE_LINUX_DEFAULT was not edited correctly:\n{{ g.grub_file }}"
+        quiet: true
+
+    - name: Every OTHER grub setting was left untouched
+      # lineinfile edits one line; a template would have rewritten the file and silently discarded
+      # these. Each is asserted individually so a partial loss cannot hide.
+      ansible.builtin.assert:
+        that:
+          - "'GRUB_DEFAULT=0' in g.grub_file"
+          - "'GRUB_TIMEOUT=5' in g.grub_file"
+          - "'GRUB_DISTRIBUTOR=' in g.grub_file"
+          - "'GRUB_TERMINAL_OUTPUT=console' in g.grub_file"
+          - 'g.grub_file is search(''GRUB_CMDLINE_LINUX=""'')'
+        fail_msg: "Unrelated grub settings were lost:\n{{ g.grub_file }}"
+        quiet: true
+
+    - name: The empty GRUB_CMDLINE_LINUX was NOT confused with the DEFAULT one
+      # Both lines start with GRUB_CMDLINE_LINUX; an unanchored or non-exact match would edit the
+      # wrong one, leaving the real cmdline unchanged while looking successful.
+      ansible.builtin.assert:
+        that:
+          - 'g.grub_file is not search(''GRUB_CMDLINE_LINUX="pcie_acs_override'')'
+          - 'g.grub_file is not search(''GRUB_CMDLINE_LINUX="iommu'')'
+        fail_msg: "The wrong GRUB_CMDLINE_LINUX* variable was edited:\n{{ g.grub_file }}"
+        quiet: true
+
+    # --- the refusal path ---------------------------------------------------------------------------
+    - name: The role REFUSES when the GPU is bound to vfio by id
+      # The safety interlock. That ids= line can be what gives a VM its passed-through devices; a
+      # role that "helpfully" edited it could detach a running guest's disks. It must stop, not fix.
+      #
+      # Asserts on the MESSAGE, not just rc: a missing role, a syntax error and a genuine refusal
+      # all exit non-zero, so rc alone would let this pass for entirely the wrong reason (for
+      # example when ANSIBLE_ROLES_PATH is wrong and the role never runs at all).
+      # The "not found" check makes that specific false pass impossible.
+      ansible.builtin.assert:
+        that:
+          - refuse.rc != 0
+          - "'was not found' not in refuse.output"
+          - "'vfio-pci by ID' in refuse.output"
+          - "'will not edit that line for you' in refuse.output"
+        fail_msg: >-
+          Role did NOT refuse for the expected reason (rc={{ refuse.rc }}).
+          output tail: {{ refuse.output[-400:] | default('(empty)') }}
+        quiet: true
+
+    - name: The role REFUSES a grub line carrying a trailing comment
+      # Confirmed-bug regression guard. With `GRUB_CMDLINE_LINUX_DEFAULT="..."  # tuned`, the
+      # extraction produces a value containing the closing quote and the comment; the rewritten
+      # line would place the ACS token AFTER a shell comment, so it never reaches the kernel —
+      # and the read-back gate cannot see it, because it re-extracts with the same expression.
+      # Apply would report success and the reboot would achieve nothing.
+      ansible.builtin.assert:
+        that:
+          - refuse.rc_comment != 0
+          - "'was not found' not in refuse.out_comment"
+          - "'not a simple double-quoted assignment' in refuse.out_comment"
+        fail_msg: >-
+          Role did not refuse a commented grub line (rc={{ refuse.rc_comment }}).
+          output tail: {{ refuse.out_comment[-400:] | default('(empty)') }}
+        quiet: true
+
+    - name: The role REFUSES when no driver on this kernel can claim the GPU
+      # The situation on PVE 8's 6.8 kernels: xe.ko exists but has no alias for
+      # 8086:e20c. Freeing the card would bind nothing, and the post-reboot result would be
+      # indistinguishable from "the ACS override failed" — after spending a maintenance window
+      # on a hypervisor reboot.
+      ansible.builtin.assert:
+        that:
+          - refuse.rc_nodriver != 0
+          - "'was not found' not in refuse.out_nodriver"
+          - "'has a PCI alias' in refuse.out_nodriver"
+        fail_msg: >-
+          Role did not refuse with no capable driver (rc={{ refuse.rc_nodriver }}).
+          output tail: {{ refuse.out_nodriver[-400:] | default('(empty)') }}
+        quiet: true
+
+    - name: The refusal did not modify the cmdline
+      # A gate that stops but has already written is not a gate.
+      ansible.builtin.slurp: { src: "{{ _cmdline }}" }
+      register: _final
+
+    - name: Cmdline after the refusal run is unchanged from the applied state
+      vars:
+        _f: "{{ _final.content | b64decode | trim }}"
+      ansible.builtin.assert:
+        that:
+          - _f == c.after_apply
+        fail_msg: "The refusal path modified the cmdline: {{ _f }}"
+        quiet: true

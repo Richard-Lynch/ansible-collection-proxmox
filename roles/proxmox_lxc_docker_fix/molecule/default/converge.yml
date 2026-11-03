@@ -1,0 +1,76 @@
+# Two consecutive "converges" of a guest's config, as a play that runs both roles performs them:
+#   1. deployment_proxmox_lxc reads the live config and computes its drift (tasks/drift.yml);
+#      if there is drift, the update is PUT (pve_conf.py put, which rewrites the file as PVE does)
+#   2. proxmox_lxc_docker_fix writes its lxc.* lines (tasks/configure.yml)
+# Each pass records what it changed. verify.yml then asserts the SECOND pass changed nothing:
+# no drift, so no PUT and no restart; no AppArmor change, so no `pct reboot`.
+#
+# The fixture `existing_guest.conf` is the state a marker-based version of the fix leaves after
+# looping (duplicate lxc pairs, one per converge), INCLUDING the blockinfile markers PVE absorbs
+# into the description. That is the state the first converge of this role must repair.
+---
+- name: Converge
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _dir: "{{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/lxc"
+    _model: "{{ playbook_dir }}/pve_conf.py"
+    # What an inventory declares for guest 101, resolved.
+    _existing_container:
+      vmid: 101
+      hostname: web
+      description: "LXC web — application server"
+      cores: 2
+      memory_mb: 4096
+      swap_mb: 1024
+      storage: local-lvm
+      storage_gb: 32
+      onboot: true
+      tags: [ansible, docker]
+      features: {nesting: 1}
+      startup: {order: 210}
+      netif:
+        net0: {name: eth0, ip: dhcp, bridge: vmbr0, gw: 192.0.2.1, tag: 40}
+
+  tasks:
+    - name: Create the stand-in for /etc/pve/lxc
+      ansible.builtin.file:
+        path: "{{ _dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Reset the fixture configs
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/fixtures/{{ item.src }}"
+        dest: "{{ _dir }}/{{ item.vmid }}.conf"
+        mode: "0644"
+      loop:
+        - {src: existing_guest.conf, vmid: 101}
+        - {src: fresh_with_snapshot.conf, vmid: 9999}
+
+    - name: Render the declared container through the role's own transform
+      ansible.builtin.include_role:
+        name: deployment_proxmox_lxc
+        tasks_from: set_vars.yml
+      vars:
+        deployment_proxmox_lxc_container: "{{ _existing_container }}"
+
+    - name: Run two consecutive converges of 101
+      ansible.builtin.include_tasks: _pass.yml
+      loop: [1, 2]
+      loop_control:
+        loop_var: _pass
+
+    # A guest that has NEVER had the fix, with a snapshot section: the lines must be inserted
+    # into the MAIN section (after `[pre-upgrade]` they would configure the snapshot), once.
+    - name: Apply the docker fix to a fresh guest, twice
+      ansible.builtin.include_tasks: _fresh_pass.yml
+      loop: [1, 2]
+      loop_control:
+        loop_var: _pass
+
+    - name: Save the results for verify
+      ansible.builtin.copy:
+        content: "{{ {'existing': _existing_results, 'fresh': _fresh_results} | to_nice_json }}"
+        dest: "{{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/results.json"
+        mode: "0644"

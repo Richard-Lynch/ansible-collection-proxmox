@@ -1,0 +1,38 @@
+---
+# Preflight gates, in their own file so the molecule scenario can include THIS file with a good and a
+# bad input and prove each gate fires. The argspec already checks types and ranges; these are the
+# cross-field and meaning checks it cannot express.
+- name: HARD GATE — the balloon floor cannot exceed the memory ceiling
+  # A floor above the ceiling is accepted by the API and means a VM that is never reclaimed from,
+  # which defeats the reason a floor was declared.
+  ansible.builtin.assert:
+    that:
+      - (proxmox_cloud_vm_balloon_mb | int) <= (proxmox_cloud_vm_memory_mb | int)
+    fail_msg: "balloon floor {{ proxmox_cloud_vm_balloon_mb }} MB is above the memory ceiling {{ proxmox_cloud_vm_memory_mb }} MB."
+    quiet: true
+
+- name: HARD GATE — the image is a pinned https download with a full sha256
+  ansible.builtin.assert:
+    that:
+      - proxmox_cloud_vm_image.url | default('') is match('\Ahttps://[^ ]+\Z')
+      - proxmox_cloud_vm_image.sha256 | default('') is match('\A[0-9a-f]{64}\Z')
+      # a dated release directory, not a moving alias: the checksum below is only true for one build
+      - proxmox_cloud_vm_image.url | default('') is not search('/(current|latest|daily)/')
+    fail_msg: >-
+      proxmox_cloud_vm_image needs an https url (not under current/latest/daily) and a 64-hex sha256.
+    quiet: true
+
+- name: HARD GATE — the key is a public key line, never a private one
+  ansible.builtin.assert:
+    that:
+      - proxmox_cloud_vm_ssh_public_key is match('\A(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp[0-9]+|sk-ssh-ed25519@openssh\.com) [A-Za-z0-9+/=]+( .*)?\Z')
+      - "'PRIVATE' not in proxmox_cloud_vm_ssh_public_key"
+    fail_msg: "proxmox_cloud_vm_ssh_public_key is not a public key line."
+    quiet: true
+
+- name: HARD GATE — the image directory is an absolute path with no shell metacharacter
+  ansible.builtin.assert:
+    that:
+      - proxmox_cloud_vm_image_dir is match('\A/[A-Za-z0-9_./-]+\Z')
+    fail_msg: "proxmox_cloud_vm_image_dir must be an absolute path of letters, digits and _./-"
+    quiet: true

@@ -1,0 +1,20 @@
+# Check/parse-mode scenario for proxmox_ci_access (a real PVE API can't run in CI).
+# Asserts the priv list excludes the dangerous privileges and the tasks parse.
+---
+dependency:
+  name: galaxy
+driver:
+  name: default
+platforms:
+  - name: localhost
+provisioner:
+  name: ansible
+  inventory:
+    host_vars:
+      localhost:
+        ansible_connection: local
+  playbooks:
+    converge: converge.yml
+    verify: verify.yml
+verifier:
+  name: ansible

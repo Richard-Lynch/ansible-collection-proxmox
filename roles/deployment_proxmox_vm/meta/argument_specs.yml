@@ -1,0 +1,194 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/deployment_proxmox_vm/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate deployment_proxmox_vm
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Deploys a VM onto a Proxmox host
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      public_ssh_key:
+        type: str
+        required: true
+      proxmox:
+        description: Common arguments required to interact with Proxmox
+        type: dict
+        required: true
+        options:
+          cluster:
+            type: str
+            required: true
+          node:
+            type: str
+            required: true
+          user:
+            type: str
+            required: true
+          password:
+            type: str
+            required: true
+          api_host:
+            type: str
+            required: true
+          api_token_id:
+            type: str
+            required: true
+          api_token_secret:
+            type: str
+            required: true
+          is_primary:
+            type: bool
+            required: true
+      deployment_proxmox_vm_template_name:
+        description: Which VM template do you want to use?
+        type: str
+        required: true
+      deployment_proxmox_vm_ci:
+        description:
+          - 'Cloud-init settings for the clone. The login user and password have no default: a'
+          - well-known default credential would be a usable login on every VM that omitted them.
+        type: dict
+        required: true
+        options:
+          user:
+            type: str
+            required: true
+          password:
+            type: str
+            required: true
+            no_log: true
+          upgrade:
+            type: bool
+            required: false
+            default: true
+      deployment_proxmox_vm_machine:
+        type: dict
+        required: true
+        options:
+          name:
+            type: str
+            required: true
+          vmid:
+            type: int
+            required: true
+          ipconfig:
+            description:
+              - See https://pve.proxmox.com/pve-docs/chapter-qm.html (search 'ipconfig[n]')
+              - 'Cloud-init: Set the IP configuration.'
+              - A hash/dictionary of network IP configurations. ipconfig='{"key":"value", "key":"value"}'.
+              - Keys allowed are - ipconfig[n] where 0 ≤ n ≤ network interfaces.
+            type: dict
+            required: false
+            options:
+              ipconfig0:
+                description:
+                  - Values allowed are - '[gw=<GatewayIPv4>] [,gw6=<GatewayIPv6>] [,ip=<IPv4Format/CIDR>] [,ip6=<IPv6Format/CIDR>]'.
+                  - IP addresses use CIDR notation, gateways are optional but they should be in the same subnet of specified IP address.
+                  - The special string dhcp can be used for IP addresses to use DHCP, in which case no explicit gateway should be provided.
+                  - For IPv6 the special string auto can be used to use stateless autoconfiguration.
+                  - If cloud-init is enabled and neither an IPv4 nor an IPv6 address is specified, it defaults to using dhcp on IPv4.
+                type: dict
+                required: false
+                options:
+                  ip:
+                    description: <IPv4Format/CIDR>
+                    type: str
+                    required: false
+                    default: dhcp
+                  gw:
+                    description: <GatewayIPv4>
+                    type: str
+                    required: false
+                  ip6:
+                    description: <IPv6Format/CIDR>
+                    type: str
+                    required: false
+                  gw6:
+                    description: <GatewayIPv6>
+                    type: str
+                    required: false
+              ipconfig1:
+                description:
+                  - Values allowed are - '[gw=<GatewayIPv4>] [,gw6=<GatewayIPv6>] [,ip=<IPv4Format/CIDR>] [,ip6=<IPv6Format/CIDR>]'.
+                  - IP addresses use CIDR notation, gateways are optional but they should be in the same subnet of specified IP address.
+                  - The special string dhcp can be used for IP addresses to use DHCP, in which case no explicit gateway should be provided.
+                  - For IPv6 the special string auto can be used to use stateless autoconfiguration.
+                  - If cloud-init is enabled and neither an IPv4 nor an IPv6 address is specified, it defaults to using dhcp on IPv4.
+                type: dict
+                required: false
+                options:
+                  ip:
+                    description: <IPv4Format/CIDR>
+                    type: str
+                    required: false
+                    default: dhcp
+                  gw:
+                    description: <GatewayIPv4>
+                    type: str
+                    required: false
+                  ip6:
+                    description: <IPv6Format/CIDR>
+                    type: str
+                    required: false
+                  gw6:
+                    description: <GatewayIPv6>
+                    type: str
+                    required: false
+              ipconfig2:
+                description:
+                  - Values allowed are - '[gw=<GatewayIPv4>] [,gw6=<GatewayIPv6>] [,ip=<IPv4Format/CIDR>] [,ip6=<IPv6Format/CIDR>]'.
+                  - IP addresses use CIDR notation, gateways are optional but they should be in the same subnet of specified IP address.
+                  - The special string dhcp can be used for IP addresses to use DHCP, in which case no explicit gateway should be provided.
+                  - For IPv6 the special string auto can be used to use stateless autoconfiguration.
+                  - If cloud-init is enabled and neither an IPv4 nor an IPv6 address is specified, it defaults to using dhcp on IPv4.
+                type: dict
+                required: false
+                options:
+                  ip:
+                    description: <IPv4Format/CIDR>
+                    type: str
+                    required: false
+                    default: dhcp
+                  gw:
+                    description: <GatewayIPv4>
+                    type: str
+                    required: false
+                  ip6:
+                    description: <IPv6Format/CIDR>
+                    type: str
+                    required: false
+                  gw6:
+                    description: <GatewayIPv6>
+                    type: str
+                    required: false
+          cores:
+            type: int
+            required: false
+            default: 2
+          memory:
+            type: int
+            required: false
+            default: 8192
+          size:
+            type: str
+            required: false
+            default: 32G
+          storage_target:
+            type: str
+            required: false
+            default: local-lvm
+            choices:
+              - local
+              - local-lvm
+          tags:
+            type: list
+            required: false
+            default:
+              - ansible
+            elements: str

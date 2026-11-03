@@ -1,0 +1,21 @@
+---
+# AUTO-GENERATED defaults file — DO NOT EDIT.
+#
+# Source of truth: roles/proxmox_kernel_install/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate proxmox_kernel_install
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+# Entrypoint:      main
+
+# false (default) reports the planned install and changes nothing.
+# true installs the package. A reboot is still required afterwards and is
+# never performed here.
+kernel_install_apply__default: false
+
+# Minimum free megabytes required on /boot before installing. A full /boot
+# during initramfs generation can leave a half-written initramfs for a kernel
+# the bootloader already references — a routine reboot then becomes a
+# recovery session.
+kernel_install_min_free_mb__default: 1024

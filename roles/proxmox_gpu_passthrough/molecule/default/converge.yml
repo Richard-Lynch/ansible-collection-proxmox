@@ -1,0 +1,373 @@
+---
+# NOTE: nested ansible-playbook invocations below call `ansible-playbook` BY NAME, resolved
+# through PATH. Building the path from VIRTUAL_ENV worked on a developer machine and silently
+# resolved to a NON-EXISTENT /usr/local/bin/ansible-playbook on CI (pip-installed ansible, no
+# VIRTUAL_ENV) — the task then "passed" in 0.3s having run nothing, and a downstream assertion
+# blamed the role. Whichever ansible runs this playbook is on PATH by definition.
+# Exercises the REAL role three times against fixtures: dry run, apply, and re-apply (idempotence).
+# Paths are redirected into a scratch tree via include_role vars, which outrank the role's own
+# vars/main.yml (verified).
+
+- name: Converge — run the real role against fixtures
+  hosts: localhost
+  gather_facts: true
+  # Play-level: `environment:` is not a valid attribute on include_role, so the fake lspci /
+  # proxmox-boot-tool are put on PATH for the whole play instead.
+  environment:
+    PATH: "/tmp/molecule-gpu-passthrough/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  vars:
+    fake_root: /tmp/molecule-gpu-passthrough
+    _scratch_cmdline: /tmp/molecule-gpu-passthrough/etc/kernel/cmdline
+    _scratch_vfio: /tmp/molecule-gpu-passthrough/etc/modprobe.d/vfio-pci.conf
+  tasks:
+    - name: Reset the scratch tree
+      # Removed first so a stale fixture can never make a broken role pass.
+      ansible.builtin.file: { path: "{{ fake_root }}", state: absent }
+
+    - name: Create the scratch dirs
+      ansible.builtin.file:
+        path: "{{ fake_root }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: [bin, "bin-nodriver", "etc/kernel", "etc/modprobe.d", "etc/default"]
+
+    - name: Install the fake lspci
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/files/lspci"
+        dest: "{{ fake_root }}/bin/lspci"
+        mode: "0755"
+
+    - name: Install a fake proxmox-boot-tool
+      # Stubbed rather than skipped: the role MUST call it (without it the cmdline file is edited
+      # but the EFI entries keep the old line, so the change silently never takes effect). The stub
+      # records that it ran, and verify.yml asserts on that.
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/bin/proxmox-boot-tool"
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          echo "$@" >> /tmp/molecule-gpu-passthrough/boot-tool.log
+          exit 0
+
+    - name: Stage the starting cmdline
+      # A representative /proc/cmdline. Realistic on purpose: it already
+      # carries intel_iommu/iommu=pt, so the union must ADD the ACS token without disturbing root=
+      # or duplicating the iommu tokens.
+      ansible.builtin.copy:
+        dest: "{{ _scratch_cmdline }}"
+        mode: "0644"
+        content: "BOOT_IMAGE=/boot/vmlinuz-6.8.12-4-pve root=/dev/mapper/pve-root ro iommu=pt quiet intel_iommu=on\n"
+
+    - name: Stage the vfio-pci config WITHOUT the GPU's id
+      # A representative file: the HBA and a NIC, and deliberately NOT the Arc. This is the state in
+      # which the role is allowed to proceed.
+      ansible.builtin.copy:
+        dest: "{{ _scratch_vfio }}"
+        mode: "0644"
+        content: "options vfio-pci ids=1000:0087,8086:105e disable_vga=1\n"
+
+    - name: Install a fake modinfo (reports xe KNOWS the Arc)
+      # The driver-alias prerequisite gate needs a modinfo to interrogate. This fixture says xe has
+      # an alias for e20c — i.e. a kernel NEWER than 6.8, which genuinely does not.
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/bin/modinfo"
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          if [ "$1" = "xe" ]; then
+            echo "filename:       /lib/modules/6.14.0/kernel/drivers/gpu/drm/xe/xe.ko"
+            echo "alias:          pci:v00008086d0000E20Csv*sd*bc03sc*i*"
+          fi
+          exit 0
+
+    - name: Install a fake update-grub
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/bin/update-grub"
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          echo "update-grub $@" >> /tmp/molecule-gpu-passthrough/boot-tool.log
+          exit 0
+
+    - name: Stage a realistic /etc/default/grub
+      # The shape of a GRUB host's file — the systemd-boot path is the one that does NOT apply
+      # there. The surrounding settings are present on
+      # purpose: the role must edit only the one assignment and leave the rest untouched.
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/etc/default/grub"
+        mode: "0644"
+        content: |
+          GRUB_DEFAULT=0
+          GRUB_TIMEOUT=5
+          GRUB_DISTRIBUTOR=`lsb_release -i -s 2> /dev/null || echo Debian`
+          GRUB_CMDLINE_LINUX_DEFAULT="iommu=pt quiet intel_iommu=on"
+          GRUB_CMDLINE_LINUX=""
+          GRUB_TERMINAL_OUTPUT=console
+
+    # --- run 1: DRY RUN — must write nothing ----------------------------------------------------
+    - name: Run the role in dry-run mode
+      ansible.builtin.include_role:
+        name: proxmox_gpu_passthrough
+      vars:
+        gpu_passthrough_device_id: "8086:e20c"
+        gpu_passthrough_apply: false
+        gpu_passthrough_vfio_conf: "{{ _scratch_vfio }}"
+        gpu_passthrough_install_packages: false
+        _gpu_cmdline_file: "{{ _scratch_cmdline }}"
+
+    - name: Capture the cmdline after the dry run
+      ansible.builtin.slurp: { src: "{{ _scratch_cmdline }}" }
+      register: _after_dry
+
+    # --- run 2: APPLY ---------------------------------------------------------------------------
+    - name: Run the role with apply
+      ansible.builtin.include_role:
+        name: proxmox_gpu_passthrough
+      vars:
+        gpu_passthrough_device_id: "8086:e20c"
+        gpu_passthrough_apply: true
+        gpu_passthrough_vfio_conf: "{{ _scratch_vfio }}"
+        gpu_passthrough_install_packages: false
+        _gpu_cmdline_file: "{{ _scratch_cmdline }}"
+
+    - name: Capture the cmdline after apply
+      ansible.builtin.slurp: { src: "{{ _scratch_cmdline }}" }
+      register: _after_apply
+
+    - name: Capture the state after apply for verify
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/captured.json"
+        mode: "0644"
+        content: |
+          {{ {
+               'after_dry': (_after_dry.content | b64decode | trim),
+               'after_apply': (_after_apply.content | b64decode | trim),
+               'changed_flag_apply': (_gpu_cmdline_changed | default('unset')),
+             } | to_nice_json }}
+
+    # --- run 3: RE-APPLY — must be a no-op -------------------------------------------------------
+    - name: Run the role with apply a SECOND time
+      # The role's real idempotence check: the union must recognise the token is already present
+      # and report no change. This is what proves a routine re-run cannot duplicate tokens or
+      # take a second backup over the first.
+      ansible.builtin.include_role:
+        name: proxmox_gpu_passthrough
+      vars:
+        gpu_passthrough_device_id: "8086:e20c"
+        gpu_passthrough_apply: true
+        gpu_passthrough_vfio_conf: "{{ _scratch_vfio }}"
+        gpu_passthrough_install_packages: false
+        _gpu_cmdline_file: "{{ _scratch_cmdline }}"
+
+    - name: Capture the second-apply state
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/captured2.json"
+        mode: "0644"
+        content: |
+          {{ {
+               'changed_flag_reapply': (_gpu_cmdline_changed | default('unset')),
+             } | to_nice_json }}
+
+    # --- run 4: the GRUB path ----------------------------------------------------------------------
+    # Not a secondary case: a GRUB host has no /etc/kernel/cmdline (proxmox-boot-tool reports no
+    # boot-uuids). A role that supported only systemd-boot would compute an empty "before" there —
+    # proposing a cmdline containing ONLY the ACS token, i.e. no root=, i.e. an unbootable machine.
+    # This fixture keeps that case covered.
+    - name: Run the role against a GRUB host (no systemd-boot cmdline present)
+      ansible.builtin.include_role:
+        name: proxmox_gpu_passthrough
+      vars:
+        gpu_passthrough_device_id: "8086:e20c"
+        gpu_passthrough_apply: true
+        gpu_passthrough_vfio_conf: "{{ _scratch_vfio }}"
+        gpu_passthrough_install_packages: false
+        # Points at a path that does NOT exist, so the role must detect grub, as on a GRUB host.
+        _gpu_cmdline_file: "{{ fake_root }}/etc/kernel/ABSENT-cmdline"
+        _gpu_grub_file: "{{ fake_root }}/etc/default/grub"
+
+    - name: Capture the grub file after apply
+      ansible.builtin.slurp: { src: "{{ fake_root }}/etc/default/grub" }
+      register: _after_grub
+
+    - name: Capture the grub state
+      # target_file/refresh_cmd are re-derived here from the same expressions the role's
+      # vars/main.yml uses, because ROLE vars are not in scope in the calling play. Not a
+      # tautology: 'bootloader' is the role's OWN computed fact, and these two are pure functions
+      # of it — so a regression in the detection logic still fails the test.
+      #
+      # The explanation lives here rather than inside the {{ }} below because '#' inside a Jinja
+      # expression is NOT a comment — it is a hard syntax error at render time.
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/captured_grub.json"
+        mode: "0644"
+        content: |
+          {{ {
+               'grub_file': (_after_grub.content | b64decode),
+               'bootloader': (_gpu_bootloader | default('unset')),
+               'target_file': (fake_root ~ '/etc/kernel/ABSENT-cmdline'
+                               if _gpu_bootloader | default('') == 'systemd-boot'
+                               else fake_root ~ '/etc/default/grub'),
+               'refresh_cmd': ('proxmox-boot-tool refresh'
+                               if _gpu_bootloader | default('') == 'systemd-boot'
+                               else 'update-grub'),
+             } | to_nice_json }}
+
+# --- run 5: the refusal path --------------------------------------------------------------------
+# A separate play because the role is EXPECTED to fail here, and a failing include_role would abort
+# the play above. Run as a subprocess so the failure can be asserted on rather than propagated.
+- name: Converge — the GPU-bound-by-id refusal path
+  hosts: localhost
+  gather_facts: false
+  vars:
+    fake_root: /tmp/molecule-gpu-passthrough
+  tasks:
+    - name: Stage a vfio-pci config that DOES bind the GPU by id
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/etc/modprobe.d/vfio-pci-bad.conf"
+        mode: "0644"
+        content: "options vfio-pci ids=1000:0087,8086:e20c disable_vga=1\n"
+
+    - name: Write a throwaway play that invokes the role against that config
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/refuse.yml"
+        mode: "0644"
+        content: |
+          - hosts: localhost
+            gather_facts: true
+            environment:
+              PATH: "{{ fake_root }}/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            tasks:
+              - include_role:
+                  name: proxmox_gpu_passthrough
+                vars:
+                  gpu_passthrough_device_id: "8086:e20c"
+                  gpu_passthrough_apply: true
+                  gpu_passthrough_vfio_conf: "{{ fake_root }}/etc/modprobe.d/vfio-pci-bad.conf"
+                  gpu_passthrough_install_packages: false
+                  _gpu_cmdline_file: "{{ fake_root }}/etc/kernel/cmdline"
+
+    - name: Run it, expecting refusal
+      ansible.builtin.command:
+        cmd: >-
+          ansible-playbook
+          -i localhost, -c local {{ fake_root }}/refuse.yml
+      environment:
+        # playbook_dir is <repo>/roles/<role>/molecule/default, so the repo's roles/ is three
+        # levels up. Resolved with realpath rather than a relative string because the subprocess
+        # runs with a different cwd and a wrong path here makes the role "not found" — which exits
+        # rc=2 and would be mistaken for the refusal this test is asserting.
+        ANSIBLE_ROLES_PATH: "{{ (playbook_dir ~ '/../../..') | realpath }}"
+        # Pinned to the default callback: molecule sets its own stdout callback in the environment,
+        # which this subprocess would otherwise inherit, and under it the assert's fail message is
+        # not printed to stdout — so the refusal reason became unassertable even though the role
+        # refused correctly. Pinning it keeps the test checking the REASON rather than just rc.
+        ANSIBLE_STDOUT_CALLBACK: default
+        ANSIBLE_LOAD_CALLBACK_PLUGINS: "0"
+      register: _refuse
+      changed_when: false
+      failed_when: false
+
+    # --- two more refusal paths, each a confirmed-bug regression guard --------------------------
+    - name: Stage a grub file whose cmdline line carries a TRAILING COMMENT
+      # Verified failure mode: extraction yields `quiet iommu=pt"  # tuned`, the rewritten line puts
+      # the new token after a shell comment, update-grub succeeds, and the read-back gate cannot
+      # catch it because it re-extracts with the same expression. Apply reports success; the ACS
+      # override never reaches the kernel.
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/etc/default/grub-comment"
+        mode: "0644"
+        content: |
+          GRUB_DEFAULT=0
+          GRUB_CMDLINE_LINUX_DEFAULT="iommu=pt quiet"  # tuned 2024
+          GRUB_CMDLINE_LINUX=""
+
+    - name: Write a play that invokes the role against the commented grub line
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/refuse_comment.yml"
+        mode: "0644"
+        content: |
+          - hosts: localhost
+            gather_facts: true
+            environment:
+              PATH: "{{ fake_root }}/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            tasks:
+              - include_role:
+                  name: proxmox_gpu_passthrough
+                vars:
+                  gpu_passthrough_device_id: "8086:e20c"
+                  gpu_passthrough_apply: true
+                  gpu_passthrough_vfio_conf: "{{ fake_root }}/etc/modprobe.d/vfio-pci.conf"
+                  gpu_passthrough_install_packages: false
+                  _gpu_cmdline_file: "{{ fake_root }}/etc/kernel/ABSENT-cmdline"
+                  _gpu_grub_file: "{{ fake_root }}/etc/default/grub-comment"
+
+    - name: Run it, expecting refusal on the line shape
+      ansible.builtin.command:
+        cmd: >-
+          ansible-playbook
+          -i localhost, -c local {{ fake_root }}/refuse_comment.yml
+      environment:
+        ANSIBLE_ROLES_PATH: "{{ (playbook_dir ~ '/../../..') | realpath }}"
+        ANSIBLE_STDOUT_CALLBACK: default
+        ANSIBLE_LOAD_CALLBACK_PLUGINS: "0"
+      register: _refuse_comment
+      changed_when: false
+      failed_when: false
+
+    - name: Write a play with NO driver alias for the card (the kernel 6.8 situation)
+      # modinfo that knows nothing: the state on PVE 8's 6.8 kernels, where neither xe nor i915
+      # has an alias for 8086:e20c. Freeing the card would bind nothing, so the role must refuse
+      # rather than let a maintenance window be spent on a change that cannot work.
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/bin-nodriver/modinfo"
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          exit 0
+
+    - name: Write a play that invokes the role with no capable driver
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/refuse_nodriver.yml"
+        mode: "0644"
+        content: |
+          - hosts: localhost
+            gather_facts: true
+            environment:
+              PATH: "{{ fake_root }}/bin-nodriver:{{ fake_root }}/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            tasks:
+              - include_role:
+                  name: proxmox_gpu_passthrough
+                vars:
+                  gpu_passthrough_device_id: "8086:e20c"
+                  gpu_passthrough_apply: true
+                  gpu_passthrough_vfio_conf: "{{ fake_root }}/etc/modprobe.d/vfio-pci.conf"
+                  gpu_passthrough_install_packages: false
+                  _gpu_cmdline_file: "{{ fake_root }}/etc/kernel/ABSENT-cmdline"
+                  _gpu_grub_file: "{{ fake_root }}/etc/default/grub"
+
+    - name: Run it, expecting refusal on the missing driver alias
+      ansible.builtin.command:
+        cmd: >-
+          ansible-playbook
+          -i localhost, -c local {{ fake_root }}/refuse_nodriver.yml
+      environment:
+        ANSIBLE_ROLES_PATH: "{{ (playbook_dir ~ '/../../..') | realpath }}"
+        ANSIBLE_STDOUT_CALLBACK: default
+        ANSIBLE_LOAD_CALLBACK_PLUGINS: "0"
+      register: _refuse_nodriver
+      changed_when: false
+      failed_when: false
+
+    - name: Record the refusal result
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/refuse.json"
+        mode: "0644"
+        content: |
+          {{ {
+               'rc': _refuse.rc,
+               'output': ((_refuse.stdout | default('')) ~ '\n' ~ (_refuse.stderr | default(''))),
+               'rc_comment': _refuse_comment.rc,
+               'out_comment': ((_refuse_comment.stdout | default('')) ~ '\n' ~ (_refuse_comment.stderr | default(''))),
+               'rc_nodriver': _refuse_nodriver.rc,
+               'out_nodriver': ((_refuse_nodriver.stdout | default('')) ~ '\n' ~ (_refuse_nodriver.stderr | default(''))),
+             } | to_nice_json }}

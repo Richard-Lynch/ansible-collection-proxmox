@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  namespace: richard_lynch
+  author: Richard Lynch
+  description: >-
+    Create a least-privilege Proxmox VE role, user, ACL and privilege-separated API token for a CI
+    pipeline: the role can create, configure and remove guests but not reconfigure the host or mint
+    tokens. The token secret is shown once, on creation.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  galaxy_tags: [proxmox, ci, api, security]
+dependencies: []

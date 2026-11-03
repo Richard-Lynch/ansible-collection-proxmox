@@ -1,0 +1,80 @@
+# The fixed-point criteria, against the two-pass record converge.yml saved.
+#
+# PROVEN CAPABLE OF FAILING (both mutants then reverted):
+#   * configure.yml changed to `blockinfile` + markers: BOTH passes report
+#     drift=['description'] and the docker fix changed — the reboot loop — and the
+#     pass-1 assertion fails (docker_fix_changed).
+#   * the drift filter's tag comparison replaced by the module's `str(list) != str`: both passes
+#     report drift in `tags`, and the pass-1 assertion fails.
+---
+- name: Verify
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _r: "{{ lookup('file', lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') ~ '/results.json') | from_json }}"
+    _h1: "{{ _r.existing[0] }}"
+    _h2: "{{ _r.existing[1] }}"
+    _f1: "{{ _r.fresh[0] }}"
+    _f2: "{{ _r.fresh[1] }}"
+    _profile: "lxc.apparmor.profile: unconfined"
+    _mount: "lxc.mount.entry: /dev/null sys/module/apparmor/parameters/enabled none bind 0 0"
+
+  tasks:
+    - name: Show each pass
+      ansible.builtin.debug:
+        msg: "{{ item | dict2items | rejectattr('key', 'equalto', 'file_after') | items2dict }}"
+      loop: "{{ _r.existing + _r.fresh }}"
+      loop_control:
+        label: "pass {{ item.pass }}"
+
+    - name: The fixture really is the state that looped (PVE absorbed the markers into the description)
+      ansible.builtin.assert:
+        that:
+          - "'BEGIN DOCKER APPARMOR WORKAROUND' in _h1.description_before"
+        fail_msg: "The fixture no longer reproduces the looping state; this scenario would prove nothing."
+        quiet: true
+
+    - name: Pass 1 — only the description drifts, and that needs no restart
+      ansible.builtin.assert:
+        that:
+          - "_h1.drift == ['description']"
+          - "not _h1.needs_restart"
+          - "not _h1.docker_fix_changed"
+        fail_msg: "Pass 1 on the live-shaped config: {{ _h1 | dict2items | rejectattr('key', 'equalto', 'file_after') | items2dict }}"
+        quiet: true
+
+    - name: Pass 2 is a FIXED POINT — no drift, no update, no restart, no reboot, file unchanged
+      ansible.builtin.assert:
+        that:
+          - "_h2.drift == []"
+          - "not _h2.needs_restart"
+          - "not _h2.docker_fix_changed"
+          - "_h2.file_after == _h1.file_after"
+        fail_msg: >-
+          A second converge would still act on guest 101:
+          drift={{ _h2.drift }} docker_fix_changed={{ _h2.docker_fix_changed }}
+          file_unchanged={{ _h2.file_after == _h1.file_after }}
+        quiet: true
+
+    - name: The AppArmor settings persist, and the markers are gone
+      ansible.builtin.assert:
+        that:
+          - "_profile in _h2.file_after.splitlines()"
+          - "_mount in _h2.file_after.splitlines()"
+          - "'DOCKER APPARMOR WORKAROUND' not in _h2.file_after"
+        fail_msg: "{{ _h2.file_after }}"
+        quiet: true
+
+    - name: A fresh guest gets the lines ONCE, in the main section, and then is a fixed point
+      ansible.builtin.assert:
+        that:
+          - "_f1.docker_fix_changed"
+          - "not _f2.docker_fix_changed"
+          - "_f2.file_after == _f1.file_after"
+          - "(_f1.file_after.splitlines() | select('equalto', _profile) | list | length) == 1"
+          - "(_f1.file_after.splitlines() | select('equalto', _mount) | list | length) == 1"
+          # Before the snapshot section, so they configure the running container.
+          - "_f1.file_after.index(_profile) < _f1.file_after.index('[pre-upgrade]')"
+          - "_f1.file_after.index(_mount) < _f1.file_after.index('[pre-upgrade]')"
+        fail_msg: "{{ _f1.file_after }}"
+        quiet: true

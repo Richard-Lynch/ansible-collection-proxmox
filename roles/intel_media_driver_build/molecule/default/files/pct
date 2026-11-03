@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Fake pct. Models the failing case: the BUNDLED driver dir SIGBUSes on the Arc; the patched
+# dir does not exist yet. This is what lets the scenario prove the role reads the real state
+# instead of assuming it.
+# Plumbing enforcement. These two rules mirror what the real tools do. Encoding them here means a
+# regression fails the scenario rather than a 20-minute build on real hardware.
+STATE=/tmp/molecule-ihd/pctstate
+mkdir -p "$STATE" 2>/dev/null
+
+case "$1" in
+  push)
+    # `pct push GUEST src dest` fails if dest's parent directory does not exist.
+    dest="$4"
+    parent=$(dirname "$dest")
+    key=$(echo "$parent" | tr / _)
+    if [ ! -f "$STATE/mkdir$key" ]; then
+      echo "unable to open file '$dest' - No such file or directory" >&2
+      exit 2
+    fi
+    exit 0
+    ;;
+  status) echo "status: running" ;;
+  exec)
+    # Everything after `-- ` is the command run inside the guest.
+    all="$*"
+    case "$all" in
+      *"mkdir -p"*)
+        # Record created dirs so the push rule above can be enforced.
+        for d in $all; do
+          case "$d" in /*) touch "$STATE/mkdir$(echo "$d" | tr / _)" 2>/dev/null ;; esac
+        done
+        exit 0
+        ;;
+    esac
+    case "$all" in
+      *"ihd-patched"*) echo "no" ;;
+      *"lib/dri/iHD_drv_video.so"*)     echo "yes" ;;
+      *renderD128*)
+        echo 'libva info: VA-API version 1.22.0'
+        echo '      VAProfileH264High               : VAEntrypointVLD'
+        echo '      VAProfileHEVCMain               : VAEntrypointVLD'
+        ;;
+      *vainfo*)
+        # The bundled-driver probe: what the broken driver prints.
+        echo 'libva info: VA-API version 1.22.0'
+        echo 'libva info: Trying to open /usr/lib/jellyfin-ffmpeg/lib/dri/iHD_drv_video.so'
+        echo 'libva info: Found init function __vaDriverInit_1_22'
+        echo 'Bus error'
+        ;;
+      *) : ;;
+    esac
+    ;;
+esac
+exit 0

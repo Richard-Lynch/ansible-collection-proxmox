@@ -1,0 +1,34 @@
+---
+# proxmox_vzdump — cluster-wide nightly vzdump backup of all guests (the local copy of a 3-2-1
+# model: cheap, per-guest). Configured via `pvesh .../cluster/backup` so it lives in /etc/pve/jobs.cfg
+# (cluster-shared). Idempotent: reconciled by a stable job comment tag.
+#
+# Point the target at an NFS/PBS storage for an offsite copy. DB-consistent dumps for running guests use mode=snapshot.
+
+# --- the backup job ---
+# Stable tag embedded in the job comment so we can find + reconcile our own job idempotently.
+proxmox_vzdump_job_tag: "ansible-managed-nightly"
+proxmox_vzdump_comment: "{{ proxmox_vzdump_job_tag }} (managed by proxmox_vzdump)"
+
+# Target the DEDICATED backup Directory storage (a thin LV mounted off the tiny root LV — see the
+# proxmox_storage_layout role), NOT `local` (which lives on the small root LV and can fill it).
+# `local-backups` exists on nodes reconciled by proxmox_storage_layout; must have content=backup.
+proxmox_vzdump_storage: "local-backups" # must have content=backup
+proxmox_vzdump_schedule: "02:45" # nightly, off the hour/half-hour where snapshot schedules run
+proxmox_vzdump_all: true # back up all guests…
+proxmox_vzdump_exclude: "" # …except these VMIDs (comma-separated), e.g. "100,101"
+proxmox_vzdump_mode: "snapshot" # snapshot = live guests, consistent-ish; suspend|stop otherwise
+proxmox_vzdump_compress: "zstd" # zstd is fast + good ratio
+proxmox_vzdump_mailnotification: "failure"
+proxmox_vzdump_notes_template: "{{ '{{guestname}}' }}" # PVE note template (literal braces)
+
+# --- retention (PVE prune-backups). Keeps the local copies bounded. ---
+# Bounded for an --all nightly to a node-local backup volume; keep it equal to the storage-level prune
+# in proxmox_storage_layout. Raise it on bigger or offsite storage.
+proxmox_vzdump_keep_daily: 3
+proxmox_vzdump_keep_weekly: 2
+proxmox_vzdump_keep_monthly: 1
+
+# Safety: enable the job on create. (The job only *runs* on schedule; creating it changes nothing until
+# 02:45.) Set false to create it disabled for review.
+proxmox_vzdump_enabled: true

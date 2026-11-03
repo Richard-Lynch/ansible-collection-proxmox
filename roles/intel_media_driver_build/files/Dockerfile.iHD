@@ -1,0 +1,116 @@
+# Builds Intel's iHD VA-API driver from source, patched for small-BAR GPUs, and emits ONLY the
+# resulting iHD_drv_video.so.
+#
+# WHY BUILD AT ALL. jellyfin-ffmpeg bundles iHD 25.2.6, which SIGBUSes during vaInitialize on a
+# small-BAR Arc (intel/media-driver#1927). The fix — PR #1990, commit c3e1867d —
+# detects small BAR and sets DRM_XE_GEM_CREATE_FLAG_NEEDS_VISIBLE_VRAM so allocations land in the
+# CPU-visible aperture with system RAM as fallback. It is in no tagged release up to
+# intel-media-26.2.4, so a source build at the fix commit is the way to get it.
+#
+# WHY UBUNTU 24.04. It must match the upstream jellyfin image (Ubuntu 24.04), because the built
+# .so is loaded by that image's jellyfin-ffmpeg and links against its libstdc++/glibc. Building on
+# Debian bookworm (what PVE 8 runs) would produce a binary that may not load there — a real trap, since it would fail at runtime rather than at build time.
+#
+# WHY A THROWAWAY CONTAINER. The alternative is installing autoconf/cmake/g++ onto a hypervisor or
+# into the running media container. Neither is acceptable: the build toolchain is large, it is
+# needed exactly once, and a production container should not gain a compiler as a side effect.
+# Everything here is discarded; only the .so is extracted.
+
+FROM ubuntu:24.04 AS build
+
+ARG MEDIA_DRIVER_REF
+ARG GMMLIB_REF
+ARG LIBVA_REF
+
+# Fail loudly rather than silently building whatever HEAD happens to be. A floating build is not
+# reproducible, and "which code is actually running on the GPU" must be answerable later.
+RUN test -n "$MEDIA_DRIVER_REF" || (echo "MEDIA_DRIVER_REF is required" >&2; exit 1)
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential cmake pkg-config git ca-certificates \
+      autoconf libtool libdrm-dev meson ninja-build \
+      libx11-dev libxext-dev libxfixes-dev libwayland-dev \
+      libx11-xcb-dev libxcb1-dev libxcb-dri3-dev libxcb-present-dev \
+      libxcb-sync-dev libxshmfence-dev wayland-protocols \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+# --- 1. libva ------------------------------------------------------------------------------------
+# Built from source rather than using the distro package so the media driver links against exactly
+# the API version it expects. Installed to /usr/local so it cannot shadow the system copy.
+#
+# X11/Wayland/GLX are disabled deliberately. This is a HEADLESS server and the driver is used only
+# for the DRM render node — the display backends are dead weight, and building them pulls in an
+# x11-xcb dependency chain that is easy to get wrong. Disabling the feature removes the whole
+# class of missing-package failures rather than chasing packages one at a time. The X dev headers
+# are still installed above so that enabling them later needs no Dockerfile surgery.
+RUN git clone --depth 1 --branch "${LIBVA_REF}" https://github.com/intel/libva.git \
+    && cd libva \
+    && meson setup build --prefix=/usr/local \
+         -Dwith_x11=no -Dwith_wayland=no -Dwith_glx=no \
+    && ninja -C build && ninja -C build install
+
+# --- 2. GmmLib -----------------------------------------------------------------------------------
+# The memory-manager library media-driver requires. Version compatibility matters: see
+# https://github.com/intel/media-driver/wiki/Compatibility-with-GmmLib
+RUN git clone --depth 1 --branch "${GMMLIB_REF}" https://github.com/intel/gmmlib.git \
+    && cd gmmlib && mkdir build && cd build \
+    && cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local .. \
+    && make -j"$(nproc)" && make install
+
+# --- 3. media-driver (iHD), at the pinned ref ----------------------------------------------------
+# Full clone, not --depth 1: a specific commit must be checkoutable, and shallow clones cannot
+# reach an arbitrary sha.
+RUN git clone https://github.com/intel/media-driver.git \
+    && cd media-driver \
+    && git checkout "${MEDIA_DRIVER_REF}"
+
+# HARD GATE, at build time: the small-BAR fix must actually be present in the checked-out tree.
+# Without this the image could be built from a ref that predates the fix and produce a driver that
+# crashes exactly as before — a silent, expensive failure discovered only after deployment.
+# ANCESTRY, not string presence. A grep for the flag name can pass on a tree that merely mentions
+# it; `merge-base --is-ancestor` proves the actual fix commit is in this history. Works because the
+# clone above is full, not shallow.
+ARG FIX_COMMIT=c3e1867d6de236102951ee40a75319dbf54beb79
+RUN cd media-driver \
+    && git merge-base --is-ancestor "${FIX_COMMIT}" HEAD \
+    && grep -q "NEEDS_VISIBLE_VRAM" media_softlet/linux/common/os/xe/mos_bufmgr_xe.c \
+    && echo "OK: fix ${FIX_COMMIT} is an ancestor of $(git rev-parse --short HEAD)"
+
+RUN cd media-driver && mkdir build && cd build \
+    && PKG_CONFIG_PATH=/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig \
+       cmake -DCMAKE_BUILD_TYPE=Release \
+             -DCMAKE_INSTALL_PREFIX=/usr/local \
+             -DENABLE_PRODUCTION_KMD=ON \
+             .. \
+    && make -j"$(nproc)"
+
+# Record provenance INSIDE the artifact directory, so the deployed driver can always be traced back
+# to the exact commits that produced it.
+# The built driver dynamically links libigdgmm.so.12. If it is left to resolve against the
+# container's BUNDLED gmmlib (matched to iHD 25.2.6, months older), it either fails to load on a
+# missing symbol or — worse — loads with a subtle ABI mismatch that no gate would catch. So the
+# gmmlib we actually built against ships alongside it.
+# STRIPPED. The unstripped build carries hundreds of MB of debug symbols. That is bind-mounted into a container and read on every transcode, so the
+# symbols cost real disk and I/O for nothing. The .sha256 below is taken AFTER stripping so the
+# install-time integrity check matches what actually ships.
+RUN mkdir -p /out \
+    && cp "$(find /src/media-driver/build -name 'iHD_drv_video.so' | head -1)" /out/ \
+    && strip --strip-unneeded /out/iHD_drv_video.so \
+    && cp -P /usr/local/lib/libigdgmm.so* /out/ 2>/dev/null || cp -P /usr/local/lib/x86_64-linux-gnu/libigdgmm.so* /out/ \
+    && ldd /out/iHD_drv_video.so > /out/BUILD_ldd.txt \
+    && cd /src/media-driver && git rev-parse HEAD > /out/BUILD_media-driver.sha \
+    && cd /src/gmmlib && git rev-parse HEAD > /out/BUILD_gmmlib.sha \
+    && cd /src/libva && git rev-parse HEAD > /out/BUILD_libva.sha \
+    && sha256sum /out/iHD_drv_video.so > /out/iHD_drv_video.so.sha256
+
+# --- final stage: nothing but the artifact -------------------------------------------------------
+FROM scratch
+COPY --from=build /out/ /
+# NEVER EXECUTED. `docker create` refuses an image with no command ("no command specified"), and
+# extraction via create+cp is the whole point of this stage — so it needs one even though nothing
+# ever runs it.
+CMD ["/iHD_drv_video.so"]

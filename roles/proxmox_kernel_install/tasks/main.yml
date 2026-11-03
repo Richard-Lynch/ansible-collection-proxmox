@@ -1,0 +1,195 @@
+---
+# Installs an additional Proxmox kernel series alongside the running one. Generate-don't-apply:
+# reports what it would install unless kernel_install_apply=true. NEVER removes a kernel, and NEVER
+# reboots — the currently-running kernel remains installed and selectable, which IS the rollback.
+#
+# See roles/proxmox_kernel_install/README.md.
+
+- name: Setup vars
+  ansible.builtin.include_tasks: setup_vars.yml
+
+# --- 1. what is installed, and what would be installed -------------------------------------------
+- name: Read the running kernel
+  ansible.builtin.command:
+    cmd: uname -r
+  register: _k_running
+  changed_when: false
+
+- name: Enumerate installed proxmox kernels
+  # `dpkg -l` filtered to properly-installed (ii) packages. A kernel in any other state (rc, iU)
+  # must not be counted as a rollback target, because it cannot be booted.
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      dpkg -l 'proxmox-kernel-*' 2>/dev/null | awk '/^ii/{print $2"|"$3}' || true
+  register: _k_installed
+  changed_when: false
+
+- name: Read the apt candidate for the requested kernel
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      apt-cache policy {{ kernel_install_package | quote }} 2>/dev/null \
+        | awk -F': ' '/Candidate:/{print $2; exit}'
+  register: _k_candidate
+  changed_when: false
+  failed_when: false
+
+- name: HARD GATE — the requested kernel must be available from a configured repo
+  # Distinguishes "not installed yet" from "does not exist here". Installing is pointless if apt
+  # has no candidate, and the apt module's own error for that case is far less legible than saying
+  # so up front.
+  ansible.builtin.assert:
+    that:
+      - (_k_candidate.stdout | trim) | length > 0
+      - (_k_candidate.stdout | trim) != '(none)'
+    fail_msg: >-
+      apt has no installation candidate for {{ kernel_install_package }} on {{ inventory_hostname }}
+      (apt-cache policy returned '{{ _k_candidate.stdout | default('') | trim }}').
+      Check the configured repositories — on PVE the newer kernel series usually lives in the
+      pve-no-subscription or bookworm-backports repo.
+    success_msg: >-
+      {{ kernel_install_package }} candidate: {{ _k_candidate.stdout | trim }}
+    quiet: true
+
+- name: Determine whether the kernel is already installed
+  ansible.builtin.set_fact:
+    _k_already: >-
+      {{ (_k_installed.stdout_lines | default([]) | select('search', '^' ~ kernel_install_package ~ '\|')
+          | list | length) > 0 }}
+
+# --- 2. free space, before writing a ~400MB kernel + initramfs to /boot --------------------------
+- name: Measure free space on the boot filesystem
+  # A full /boot during initramfs generation is a genuinely nasty failure: it can leave a
+  # half-written initramfs for a kernel the bootloader has already been told about. Cheap to check,
+  # expensive to hit.
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      df -Pm /boot 2>/dev/null | awk 'NR==2{print $4}'
+  register: _k_boot_free
+  changed_when: false
+
+- name: HARD GATE — enough free space for a new kernel and its initramfs
+  ansible.builtin.assert:
+    that:
+      - (_k_boot_free.stdout | trim | int) >= (kernel_install_min_free_mb | int)
+    fail_msg: >-
+      Only {{ _k_boot_free.stdout | trim }}MB free on /boot on {{ inventory_hostname }};
+      {{ kernel_install_min_free_mb }}MB required. Installing a kernel into a nearly-full /boot can
+      leave a half-written initramfs for a kernel the bootloader already references.
+    success_msg: "{{ _k_boot_free.stdout | trim }}MB free on /boot."
+    quiet: true
+
+# --- 3. report -----------------------------------------------------------------------------------
+- name: Report the planned change
+  ansible.builtin.debug:
+    msg:
+      - "host:              {{ inventory_hostname }}"
+      - "running kernel:    {{ _k_running.stdout | trim }}"
+      - "installed:         {{ _k_installed.stdout_lines | default([]) | join(', ') | default('none', true) }}"
+      - "requested:         {{ kernel_install_package }}"
+      - "apt candidate:     {{ _k_candidate.stdout | trim }}"
+      - "already installed: {{ _k_already }}"
+      - "/boot free (MB):   {{ _k_boot_free.stdout | trim }}"
+      - "apply:             {{ kernel_install_apply | bool }}"
+
+- name: Report that this is a dry run
+  ansible.builtin.debug:
+    msg: >-
+      DRY RUN — nothing installed. Re-run with kernel_install_apply=true.
+      The running kernel ({{ _k_running.stdout | trim }}) is never removed and stays selectable in
+      the boot menu, which is the rollback for this change.
+  when:
+    - not (kernel_install_apply | bool)
+    - not (_k_already | bool)
+
+# --- 4. apply --------------------------------------------------------------------------------------
+- name: Install the kernel
+  when:
+    - kernel_install_apply | bool
+    - not (_k_already | bool)
+  block:
+    - name: Install the requested kernel package
+      # state: present, never `latest`, and only the ONE named package: this must not become an
+      # incidental full-system upgrade of a hypervisor. autoremove/autoclean are likewise never
+      # invoked, so no existing kernel can be removed as a side effect.
+      ansible.builtin.apt:
+        name: "{{ kernel_install_package }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+        autoremove: false
+      register: _k_apt
+
+    - name: Re-read the installed kernel list
+      # An explicit read-back rather than trusting the apt module's changed flag — this is the
+      # thing that decides whether the reboot has a kernel to boot into.
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -o pipefail
+          dpkg -l 'proxmox-kernel-*' 2>/dev/null | awk '/^ii/{print $2"|"$3}' || true
+      register: _k_installed_after
+      changed_when: false
+
+    - name: HARD GATE — the kernel must actually be installed now
+      ansible.builtin.assert:
+        that:
+          - (_k_installed_after.stdout_lines | default([]) | select('search', '^' ~ kernel_install_package ~ '\|') | list | length) > 0
+        fail_msg: >-
+          {{ kernel_install_package }} is still not installed after the apt run on
+          {{ inventory_hostname }}. Do NOT reboot expecting the new kernel.
+          Installed: {{ _k_installed_after.stdout_lines | default([]) | join(', ') }}
+        success_msg: "{{ kernel_install_package }} is installed."
+        quiet: true
+
+    - name: List the kernel images the bootloader can actually offer
+      # The package being installed is not the same statement as "a bootable image and initramfs
+      # exist on /boot". A kernel that dpkg believes is installed but whose initramfs generation
+      # failed is exactly the state that turns a routine reboot into a recovery session.
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -o pipefail
+          for v in $(ls /boot/vmlinuz-* 2>/dev/null | sed 's|.*/vmlinuz-||' | sort -V); do
+            if [ -f "/boot/initrd.img-$v" ]; then echo "OK|$v"; else echo "NOINITRD|$v"; fi
+          done
+      register: _k_images
+      changed_when: false
+
+    - name: HARD GATE — every kernel image on /boot must have an initramfs
+      ansible.builtin.assert:
+        that:
+          - (_k_images.stdout_lines | default([]) | select('search', '^NOINITRD') | list | length) == 0
+          - (_k_images.stdout_lines | default([]) | select('search', '^OK') | list | length) >= 2
+        fail_msg: >-
+          Kernel images on /boot are not all bootable:
+          {{ _k_images.stdout_lines | default([]) | join(', ') }}.
+          A kernel without an initramfs will not boot. Do NOT reboot — investigate
+          `update-initramfs -u -k <version>` first.
+        success_msg: >-
+          Bootable kernels: {{ _k_images.stdout_lines | default([])
+                               | select('search', '^OK') | list | length }}.
+        quiet: true
+
+    - name: Report what happens next
+      ansible.builtin.debug:
+        msg:
+          - "INSTALLED {{ kernel_install_package }}. The host is STILL RUNNING {{ _k_running.stdout | trim }}."
+          - "A reboot is required to use it — this role does not reboot."
+          - "Bootable kernels now on /boot: {{ _k_images.stdout_lines | default([]) | join(', ') }}"
+          - "ROLLBACK: the running kernel is still installed. If the new one misbehaves, select the"
+          - "          previous entry in the boot menu, or `proxmox-boot-tool kernel pin <version>`."
+
+- name: Report that the kernel was already installed
+  ansible.builtin.debug:
+    msg: >-
+      {{ kernel_install_package }} is already installed on {{ inventory_hostname }} — nothing to do.
+      Running kernel is {{ _k_running.stdout | trim }}
+      {{ '(a reboot is still pending to use the newer one)'
+         if kernel_install_package.split('-')[-1] not in (_k_running.stdout | trim) else '' }}
+  when: _k_already | bool

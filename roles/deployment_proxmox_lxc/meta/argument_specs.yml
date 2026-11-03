@@ -1,0 +1,1083 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/deployment_proxmox_lxc/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate deployment_proxmox_lxc
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Deploys an LXC container onto a Proxmox host
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      public_ssh_key:
+        type: str
+        required: true
+      utils_verify_connection_retries:
+        description:
+          - How many times to refresh the dynamic inventory waiting for a newly
+          - created guest to appear with an address. A fresh LXC must boot and take a
+          - DHCP lease, so this is seconds-to-a-minute territory.
+        type: int
+        required: false
+        default: 10
+      utils_verify_connection_delay:
+        description:
+          - Seconds to pause between inventory refresh attempts.
+        type: int
+        required: false
+        default: 5
+      proxmox:
+        description: Common arguments required to interact with Proxmox
+        type: dict
+        required: true
+        options:
+          cluster:
+            type: str
+            required: true
+          node:
+            type: str
+            required: true
+          user:
+            type: str
+            required: true
+          password:
+            type: str
+            required: true
+          api_host:
+            type: str
+            required: true
+          api_token_id:
+            type: str
+            required: true
+          api_token_secret:
+            type: str
+            required: true
+          is_primary:
+            type: bool
+            required: true
+      deployment_proxmox_lxc_template:
+        description: The configuration for the LXC template to use
+        type: dict
+        required: false
+        default:
+          name: debian-12-standard_12.7-1_amd64.tar.zst
+          storage: local
+        options:
+          name:
+            type: str
+            required: false
+            default: debian-12-standard_12.7-1_amd64.tar.zst
+          storage:
+            type: str
+            required: false
+            default: local
+            choices:
+              - local
+              - local-lvm
+      deployment_proxmox_lxc_container:
+        description: The configuration for the LXC container to be created
+        type: dict
+        required: false
+        options:
+          vmid:
+            type: str
+            required: true
+          hostname:
+            type: str
+            required: true
+          description:
+            type: str
+            required: true
+          user:
+            type: str
+            required: true
+          password:
+            type: str
+            required: true
+          netif:
+            description:
+              - https://pve.proxmox.com/pve-docs/chapter-pct.html#pct_container_network
+            type: dict
+            required: false
+            options:
+              net0:
+                type: dict
+                required: false
+                options:
+                  name:
+                    description:
+                      - name=<string>
+                      - Name of the network device as seen from inside the container. (lxc.network.name)
+                    type: str
+                    required: true
+                  bridge:
+                    description:
+                      - bridge=<bridge>
+                      - Bridge to attach the network device to.
+                    type: str
+                    required: true
+                  firewall:
+                    description:
+                      - firewall=<boolean>
+                      - Controls whether this interface's firewall rules should be used.
+                    type: bool
+                    required: false
+                  gw:
+                    description:
+                      - gw=<GatewayIPv4>
+                      - Default gateway for IPv4 traffic.
+                    type: str
+                    required: false
+                  gw6:
+                    description:
+                      - gw6=<GatewayIPv6>
+                      - Default gateway for IPv6 traffic.
+                    type: str
+                    required: false
+                  hwaddr:
+                    description:
+                      - hwaddr=<XX:XX:XX:XX:XX:XX>
+                      - A common MAC address with the I/G (Individual/Group) bit not set.
+                    type: str
+                    required: false
+                  ip:
+                    description:
+                      - ip=<(IPv4/CIDR|dhcp|manual)>
+                      - IPv4 address in CIDR format.
+                    type: str
+                    required: true
+                  ip6:
+                    description:
+                      - ip6=<(IPv6/CIDR|auto|dhcp|manual)>
+                      - IPv6 address in CIDR format.
+                    type: str
+                    required: false
+                  link_down:
+                    description:
+                      - link_down=<boolean>
+                      - Whether this interface should be disconnected (like pulling the plug).
+                    type: bool
+                    required: false
+                  mtu:
+                    description:
+                      - mtu=<integer> (64 - 65535)
+                      - Maximum transfer unit of the interface. (lxc.network.mtu)
+                    type: int
+                    required: false
+                  rate:
+                    description:
+                      - rate=<mbps>
+                      - Apply rate limiting to the interface.
+                    type: int
+                    required: false
+                  tag:
+                    description:
+                      - tag=<integer> (1 - 4094)
+                      - VLAN tag for this interface.
+                    type: int
+                    required: false
+                  trunks:
+                    description:
+                      - trunks=<vlanid[;vlanid...]>
+                      - VLAN ids to pass through the interface
+                    type: str
+                    required: false
+                  type:
+                    description:
+                      - type=<veth>
+                      - Network interface type.
+                    type: str
+                    required: false
+              net1:
+                type: dict
+                required: false
+                options:
+                  name:
+                    description:
+                      - name=<string>
+                      - Name of the network device as seen from inside the container. (lxc.network.name)
+                    type: str
+                    required: true
+                  bridge:
+                    description:
+                      - bridge=<bridge>
+                      - Bridge to attach the network device to.
+                    type: str
+                    required: true
+                  firewall:
+                    description:
+                      - firewall=<boolean>
+                      - Controls whether this interface's firewall rules should be used.
+                    type: bool
+                    required: false
+                  gw:
+                    description:
+                      - gw=<GatewayIPv4>
+                      - Default gateway for IPv4 traffic.
+                    type: str
+                    required: false
+                  gw6:
+                    description:
+                      - gw6=<GatewayIPv6>
+                      - Default gateway for IPv6 traffic.
+                    type: str
+                    required: false
+                  hwaddr:
+                    description:
+                      - hwaddr=<XX:XX:XX:XX:XX:XX>
+                      - A common MAC address with the I/G (Individual/Group) bit not set.
+                    type: str
+                    required: false
+                  ip:
+                    description:
+                      - ip=<(IPv4/CIDR|dhcp|manual)>
+                      - IPv4 address in CIDR format.
+                    type: str
+                    required: true
+                  ip6:
+                    description:
+                      - ip6=<(IPv6/CIDR|auto|dhcp|manual)>
+                      - IPv6 address in CIDR format.
+                    type: str
+                    required: false
+                  link_down:
+                    description:
+                      - link_down=<boolean>
+                      - Whether this interface should be disconnected (like pulling the plug).
+                    type: bool
+                    required: false
+                  mtu:
+                    description:
+                      - mtu=<integer> (64 - 65535)
+                      - Maximum transfer unit of the interface. (lxc.network.mtu)
+                    type: int
+                    required: false
+                  rate:
+                    description:
+                      - rate=<mbps>
+                      - Apply rate limiting to the interface.
+                    type: int
+                    required: false
+                  tag:
+                    description:
+                      - tag=<integer> (1 - 4094)
+                      - VLAN tag for this interface.
+                    type: int
+                    required: false
+                  trunks:
+                    description:
+                      - trunks=<vlanid[;vlanid...]>
+                      - VLAN ids to pass through the interface
+                    type: str
+                    required: false
+                  type:
+                    description:
+                      - type=<veth>
+                      - Network interface type.
+                    type: str
+                    required: false
+              net2:
+                type: dict
+                required: false
+                options:
+                  name:
+                    description:
+                      - name=<string>
+                      - Name of the network device as seen from inside the container. (lxc.network.name)
+                    type: str
+                    required: true
+                  bridge:
+                    description:
+                      - bridge=<bridge>
+                      - Bridge to attach the network device to.
+                    type: str
+                    required: true
+                  firewall:
+                    description:
+                      - firewall=<boolean>
+                      - Controls whether this interface's firewall rules should be used.
+                    type: bool
+                    required: false
+                  gw:
+                    description:
+                      - gw=<GatewayIPv4>
+                      - Default gateway for IPv4 traffic.
+                    type: str
+                    required: false
+                  gw6:
+                    description:
+                      - gw6=<GatewayIPv6>
+                      - Default gateway for IPv6 traffic.
+                    type: str
+                    required: false
+                  hwaddr:
+                    description:
+                      - hwaddr=<XX:XX:XX:XX:XX:XX>
+                      - A common MAC address with the I/G (Individual/Group) bit not set.
+                    type: str
+                    required: false
+                  ip:
+                    description:
+                      - ip=<(IPv4/CIDR|dhcp|manual)>
+                      - IPv4 address in CIDR format.
+                    type: str
+                    required: true
+                  ip6:
+                    description:
+                      - ip6=<(IPv6/CIDR|auto|dhcp|manual)>
+                      - IPv6 address in CIDR format.
+                    type: str
+                    required: false
+                  link_down:
+                    description:
+                      - link_down=<boolean>
+                      - Whether this interface should be disconnected (like pulling the plug).
+                    type: bool
+                    required: false
+                  mtu:
+                    description:
+                      - mtu=<integer> (64 - 65535)
+                      - Maximum transfer unit of the interface. (lxc.network.mtu)
+                    type: int
+                    required: false
+                  rate:
+                    description:
+                      - rate=<mbps>
+                      - Apply rate limiting to the interface.
+                    type: int
+                    required: false
+                  tag:
+                    description:
+                      - tag=<integer> (1 - 4094)
+                      - VLAN tag for this interface.
+                    type: int
+                    required: false
+                  trunks:
+                    description:
+                      - trunks=<vlanid[;vlanid...]>
+                      - VLAN ids to pass through the interface
+                    type: str
+                    required: false
+                  type:
+                    description:
+                      - type=<veth>
+                      - Network interface type.
+                    type: str
+                    required: false
+              net3:
+                type: dict
+                required: false
+                options:
+                  name:
+                    description:
+                      - name=<string>
+                      - Name of the network device as seen from inside the container. (lxc.network.name)
+                    type: str
+                    required: true
+                  bridge:
+                    description:
+                      - bridge=<bridge>
+                      - Bridge to attach the network device to.
+                    type: str
+                    required: true
+                  firewall:
+                    description:
+                      - firewall=<boolean>
+                      - Controls whether this interface's firewall rules should be used.
+                    type: bool
+                    required: false
+                  gw:
+                    description:
+                      - gw=<GatewayIPv4>
+                      - Default gateway for IPv4 traffic.
+                    type: str
+                    required: false
+                  gw6:
+                    description:
+                      - gw6=<GatewayIPv6>
+                      - Default gateway for IPv6 traffic.
+                    type: str
+                    required: false
+                  hwaddr:
+                    description:
+                      - hwaddr=<XX:XX:XX:XX:XX:XX>
+                      - A common MAC address with the I/G (Individual/Group) bit not set.
+                    type: str
+                    required: false
+                  ip:
+                    description:
+                      - ip=<(IPv4/CIDR|dhcp|manual)>
+                      - IPv4 address in CIDR format.
+                    type: str
+                    required: true
+                  ip6:
+                    description:
+                      - ip6=<(IPv6/CIDR|auto|dhcp|manual)>
+                      - IPv6 address in CIDR format.
+                    type: str
+                    required: false
+                  link_down:
+                    description:
+                      - link_down=<boolean>
+                      - Whether this interface should be disconnected (like pulling the plug).
+                    type: bool
+                    required: false
+                  mtu:
+                    description:
+                      - mtu=<integer> (64 - 65535)
+                      - Maximum transfer unit of the interface. (lxc.network.mtu)
+                    type: int
+                    required: false
+                  rate:
+                    description:
+                      - rate=<mbps>
+                      - Apply rate limiting to the interface.
+                    type: int
+                    required: false
+                  tag:
+                    description:
+                      - tag=<integer> (1 - 4094)
+                      - VLAN tag for this interface.
+                    type: int
+                    required: false
+                  trunks:
+                    description:
+                      - trunks=<vlanid[;vlanid...]>
+                      - VLAN ids to pass through the interface
+                    type: str
+                    required: false
+                  type:
+                    description:
+                      - type=<veth>
+                      - Network interface type.
+                    type: str
+                    required: false
+              net4:
+                type: dict
+                required: false
+                options:
+                  name:
+                    description:
+                      - name=<string>
+                      - Name of the network device as seen from inside the container. (lxc.network.name)
+                    type: str
+                    required: true
+                  bridge:
+                    description:
+                      - bridge=<bridge>
+                      - Bridge to attach the network device to.
+                    type: str
+                    required: true
+                  firewall:
+                    description:
+                      - firewall=<boolean>
+                      - Controls whether this interface's firewall rules should be used.
+                    type: bool
+                    required: false
+                  gw:
+                    description:
+                      - gw=<GatewayIPv4>
+                      - Default gateway for IPv4 traffic.
+                    type: str
+                    required: false
+                  gw6:
+                    description:
+                      - gw6=<GatewayIPv6>
+                      - Default gateway for IPv6 traffic.
+                    type: str
+                    required: false
+                  hwaddr:
+                    description:
+                      - hwaddr=<XX:XX:XX:XX:XX:XX>
+                      - A common MAC address with the I/G (Individual/Group) bit not set.
+                    type: str
+                    required: false
+                  ip:
+                    description:
+                      - ip=<(IPv4/CIDR|dhcp|manual)>
+                      - IPv4 address in CIDR format.
+                    type: str
+                    required: true
+                  ip6:
+                    description:
+                      - ip6=<(IPv6/CIDR|auto|dhcp|manual)>
+                      - IPv6 address in CIDR format.
+                    type: str
+                    required: false
+                  link_down:
+                    description:
+                      - link_down=<boolean>
+                      - Whether this interface should be disconnected (like pulling the plug).
+                    type: bool
+                    required: false
+                  mtu:
+                    description:
+                      - mtu=<integer> (64 - 65535)
+                      - Maximum transfer unit of the interface. (lxc.network.mtu)
+                    type: int
+                    required: false
+                  rate:
+                    description:
+                      - rate=<mbps>
+                      - Apply rate limiting to the interface.
+                    type: int
+                    required: false
+                  tag:
+                    description:
+                      - tag=<integer> (1 - 4094)
+                      - VLAN tag for this interface.
+                    type: int
+                    required: false
+                  trunks:
+                    description:
+                      - trunks=<vlanid[;vlanid...]>
+                      - VLAN ids to pass through the interface
+                    type: str
+                    required: false
+                  type:
+                    description:
+                      - type=<veth>
+                      - Network interface type.
+                    type: str
+                    required: false
+              net5:
+                type: dict
+                required: false
+                options:
+                  name:
+                    description:
+                      - name=<string>
+                      - Name of the network device as seen from inside the container. (lxc.network.name)
+                    type: str
+                    required: true
+                  bridge:
+                    description:
+                      - bridge=<bridge>
+                      - Bridge to attach the network device to.
+                    type: str
+                    required: true
+                  firewall:
+                    description:
+                      - firewall=<boolean>
+                      - Controls whether this interface's firewall rules should be used.
+                    type: bool
+                    required: false
+                  gw:
+                    description:
+                      - gw=<GatewayIPv4>
+                      - Default gateway for IPv4 traffic.
+                    type: str
+                    required: false
+                  gw6:
+                    description:
+                      - gw6=<GatewayIPv6>
+                      - Default gateway for IPv6 traffic.
+                    type: str
+                    required: false
+                  hwaddr:
+                    description:
+                      - hwaddr=<XX:XX:XX:XX:XX:XX>
+                      - A common MAC address with the I/G (Individual/Group) bit not set.
+                    type: str
+                    required: false
+                  ip:
+                    description:
+                      - ip=<(IPv4/CIDR|dhcp|manual)>
+                      - IPv4 address in CIDR format.
+                    type: str
+                    required: true
+                  ip6:
+                    description:
+                      - ip6=<(IPv6/CIDR|auto|dhcp|manual)>
+                      - IPv6 address in CIDR format.
+                    type: str
+                    required: false
+                  link_down:
+                    description:
+                      - link_down=<boolean>
+                      - Whether this interface should be disconnected (like pulling the plug).
+                    type: bool
+                    required: false
+                  mtu:
+                    description:
+                      - mtu=<integer> (64 - 65535)
+                      - Maximum transfer unit of the interface. (lxc.network.mtu)
+                    type: int
+                    required: false
+                  rate:
+                    description:
+                      - rate=<mbps>
+                      - Apply rate limiting to the interface.
+                    type: int
+                    required: false
+                  tag:
+                    description:
+                      - tag=<integer> (1 - 4094)
+                      - VLAN tag for this interface.
+                    type: int
+                    required: false
+                  trunks:
+                    description:
+                      - trunks=<vlanid[;vlanid...]>
+                      - VLAN ids to pass through the interface
+                    type: str
+                    required: false
+                  type:
+                    description:
+                      - type=<veth>
+                      - Network interface type.
+                    type: str
+                    required: false
+              net6:
+                type: dict
+                required: false
+                options:
+                  name:
+                    description:
+                      - name=<string>
+                      - Name of the network device as seen from inside the container. (lxc.network.name)
+                    type: str
+                    required: true
+                  bridge:
+                    description:
+                      - bridge=<bridge>
+                      - Bridge to attach the network device to.
+                    type: str
+                    required: true
+                  firewall:
+                    description:
+                      - firewall=<boolean>
+                      - Controls whether this interface's firewall rules should be used.
+                    type: bool
+                    required: false
+                  gw:
+                    description:
+                      - gw=<GatewayIPv4>
+                      - Default gateway for IPv4 traffic.
+                    type: str
+                    required: false
+                  gw6:
+                    description:
+                      - gw6=<GatewayIPv6>
+                      - Default gateway for IPv6 traffic.
+                    type: str
+                    required: false
+                  hwaddr:
+                    description:
+                      - hwaddr=<XX:XX:XX:XX:XX:XX>
+                      - A common MAC address with the I/G (Individual/Group) bit not set.
+                    type: str
+                    required: false
+                  ip:
+                    description:
+                      - ip=<(IPv4/CIDR|dhcp|manual)>
+                      - IPv4 address in CIDR format.
+                    type: str
+                    required: true
+                  ip6:
+                    description:
+                      - ip6=<(IPv6/CIDR|auto|dhcp|manual)>
+                      - IPv6 address in CIDR format.
+                    type: str
+                    required: false
+                  link_down:
+                    description:
+                      - link_down=<boolean>
+                      - Whether this interface should be disconnected (like pulling the plug).
+                    type: bool
+                    required: false
+                  mtu:
+                    description:
+                      - mtu=<integer> (64 - 65535)
+                      - Maximum transfer unit of the interface. (lxc.network.mtu)
+                    type: int
+                    required: false
+                  rate:
+                    description:
+                      - rate=<mbps>
+                      - Apply rate limiting to the interface.
+                    type: int
+                    required: false
+                  tag:
+                    description:
+                      - tag=<integer> (1 - 4094)
+                      - VLAN tag for this interface.
+                    type: int
+                    required: false
+                  trunks:
+                    description:
+                      - trunks=<vlanid[;vlanid...]>
+                      - VLAN ids to pass through the interface
+                    type: str
+                    required: false
+                  type:
+                    description:
+                      - type=<veth>
+                      - Network interface type.
+                    type: str
+                    required: false
+              net7:
+                type: dict
+                required: false
+                options:
+                  name:
+                    description:
+                      - name=<string>
+                      - Name of the network device as seen from inside the container. (lxc.network.name)
+                    type: str
+                    required: true
+                  bridge:
+                    description:
+                      - bridge=<bridge>
+                      - Bridge to attach the network device to.
+                    type: str
+                    required: true
+                  firewall:
+                    description:
+                      - firewall=<boolean>
+                      - Controls whether this interface's firewall rules should be used.
+                    type: bool
+                    required: false
+                  gw:
+                    description:
+                      - gw=<GatewayIPv4>
+                      - Default gateway for IPv4 traffic.
+                    type: str
+                    required: false
+                  gw6:
+                    description:
+                      - gw6=<GatewayIPv6>
+                      - Default gateway for IPv6 traffic.
+                    type: str
+                    required: false
+                  hwaddr:
+                    description:
+                      - hwaddr=<XX:XX:XX:XX:XX:XX>
+                      - A common MAC address with the I/G (Individual/Group) bit not set.
+                    type: str
+                    required: false
+                  ip:
+                    description:
+                      - ip=<(IPv4/CIDR|dhcp|manual)>
+                      - IPv4 address in CIDR format.
+                    type: str
+                    required: true
+                  ip6:
+                    description:
+                      - ip6=<(IPv6/CIDR|auto|dhcp|manual)>
+                      - IPv6 address in CIDR format.
+                    type: str
+                    required: false
+                  link_down:
+                    description:
+                      - link_down=<boolean>
+                      - Whether this interface should be disconnected (like pulling the plug).
+                    type: bool
+                    required: false
+                  mtu:
+                    description:
+                      - mtu=<integer> (64 - 65535)
+                      - Maximum transfer unit of the interface. (lxc.network.mtu)
+                    type: int
+                    required: false
+                  rate:
+                    description:
+                      - rate=<mbps>
+                      - Apply rate limiting to the interface.
+                    type: int
+                    required: false
+                  tag:
+                    description:
+                      - tag=<integer> (1 - 4094)
+                      - VLAN tag for this interface.
+                    type: int
+                    required: false
+                  trunks:
+                    description:
+                      - trunks=<vlanid[;vlanid...]>
+                      - VLAN ids to pass through the interface
+                    type: str
+                    required: false
+                  type:
+                    description:
+                      - type=<veth>
+                      - Network interface type.
+                    type: str
+                    required: false
+              net8:
+                type: dict
+                required: false
+                options:
+                  name:
+                    description:
+                      - name=<string>
+                      - Name of the network device as seen from inside the container. (lxc.network.name)
+                    type: str
+                    required: true
+                  bridge:
+                    description:
+                      - bridge=<bridge>
+                      - Bridge to attach the network device to.
+                    type: str
+                    required: true
+                  firewall:
+                    description:
+                      - firewall=<boolean>
+                      - Controls whether this interface's firewall rules should be used.
+                    type: bool
+                    required: false
+                  gw:
+                    description:
+                      - gw=<GatewayIPv4>
+                      - Default gateway for IPv4 traffic.
+                    type: str
+                    required: false
+                  gw6:
+                    description:
+                      - gw6=<GatewayIPv6>
+                      - Default gateway for IPv6 traffic.
+                    type: str
+                    required: false
+                  hwaddr:
+                    description:
+                      - hwaddr=<XX:XX:XX:XX:XX:XX>
+                      - A common MAC address with the I/G (Individual/Group) bit not set.
+                    type: str
+                    required: false
+                  ip:
+                    description:
+                      - ip=<(IPv4/CIDR|dhcp|manual)>
+                      - IPv4 address in CIDR format.
+                    type: str
+                    required: true
+                  ip6:
+                    description:
+                      - ip6=<(IPv6/CIDR|auto|dhcp|manual)>
+                      - IPv6 address in CIDR format.
+                    type: str
+                    required: false
+                  link_down:
+                    description:
+                      - link_down=<boolean>
+                      - Whether this interface should be disconnected (like pulling the plug).
+                    type: bool
+                    required: false
+                  mtu:
+                    description:
+                      - mtu=<integer> (64 - 65535)
+                      - Maximum transfer unit of the interface. (lxc.network.mtu)
+                    type: int
+                    required: false
+                  rate:
+                    description:
+                      - rate=<mbps>
+                      - Apply rate limiting to the interface.
+                    type: int
+                    required: false
+                  tag:
+                    description:
+                      - tag=<integer> (1 - 4094)
+                      - VLAN tag for this interface.
+                    type: int
+                    required: false
+                  trunks:
+                    description:
+                      - trunks=<vlanid[;vlanid...]>
+                      - VLAN ids to pass through the interface
+                    type: str
+                    required: false
+                  type:
+                    description:
+                      - type=<veth>
+                      - Network interface type.
+                    type: str
+                    required: false
+              net9:
+                type: dict
+                required: false
+                options:
+                  name:
+                    description:
+                      - name=<string>
+                      - Name of the network device as seen from inside the container. (lxc.network.name)
+                    type: str
+                    required: true
+                  bridge:
+                    description:
+                      - bridge=<bridge>
+                      - Bridge to attach the network device to.
+                    type: str
+                    required: true
+                  firewall:
+                    description:
+                      - firewall=<boolean>
+                      - Controls whether this interface's firewall rules should be used.
+                    type: bool
+                    required: false
+                  gw:
+                    description:
+                      - gw=<GatewayIPv4>
+                      - Default gateway for IPv4 traffic.
+                    type: str
+                    required: false
+                  gw6:
+                    description:
+                      - gw6=<GatewayIPv6>
+                      - Default gateway for IPv6 traffic.
+                    type: str
+                    required: false
+                  hwaddr:
+                    description:
+                      - hwaddr=<XX:XX:XX:XX:XX:XX>
+                      - A common MAC address with the I/G (Individual/Group) bit not set.
+                    type: str
+                    required: false
+                  ip:
+                    description:
+                      - ip=<(IPv4/CIDR|dhcp|manual)>
+                      - IPv4 address in CIDR format.
+                    type: str
+                    required: true
+                  ip6:
+                    description:
+                      - ip6=<(IPv6/CIDR|auto|dhcp|manual)>
+                      - IPv6 address in CIDR format.
+                    type: str
+                    required: false
+                  link_down:
+                    description:
+                      - link_down=<boolean>
+                      - Whether this interface should be disconnected (like pulling the plug).
+                    type: bool
+                    required: false
+                  mtu:
+                    description:
+                      - mtu=<integer> (64 - 65535)
+                      - Maximum transfer unit of the interface. (lxc.network.mtu)
+                    type: int
+                    required: false
+                  rate:
+                    description:
+                      - rate=<mbps>
+                      - Apply rate limiting to the interface.
+                    type: int
+                    required: false
+                  tag:
+                    description:
+                      - tag=<integer> (1 - 4094)
+                      - VLAN tag for this interface.
+                    type: int
+                    required: false
+                  trunks:
+                    description:
+                      - trunks=<vlanid[;vlanid...]>
+                      - VLAN ids to pass through the interface
+                    type: str
+                    required: false
+                  type:
+                    description:
+                      - type=<veth>
+                      - Network interface type.
+                    type: str
+                    required: false
+          onboot:
+            description:
+              - Specifies whether a VM will be started during system bootup.
+            type: bool
+            required: false
+            default: false
+          startup:
+            description:
+              - Controls the order of the startup
+              - https://docs.ansible.com/ansible/latest/collections/community/general/proxmox_module.html#parameter-startup
+              - 'Use order=# where # is a non-negative number to define the general startup order. Shutdown in done with reverse ordering.'
+              - 'Use up=# where # is in seconds, to specify a delay to wait before the next VM is started.'
+              - 'Use down=# where # is in seconds, to specify a delay to wait before the next VM is stopped.'
+            type: dict
+            required: false
+            options:
+              order:
+                description: non-negative number to define the general startup order. Shutdown in done with reverse ordering.
+                type: int
+                required: false
+              up:
+                description: seconds, to specify a delay to wait before the next VM is started.
+                type: int
+                required: false
+              down:
+                description: seconds, to specify a delay to wait before the next VM is stopped.
+                type: int
+                required: false
+          features:
+            description:
+              - See https://pve.proxmox.com/wiki/Linux_Container
+              - 'features: [force_rw_sys=<1|0>] [,fuse=<1|0>] [,keyctl=<1|0>] [,mknod=<1|0>] [,mount=<fstype;fstype;...>] [,nesting=<1|0>]'
+            type: dict
+            required: true
+            options:
+              force_rw_sys:
+                type: int
+                required: false
+                choices:
+                  - 0
+                  - 1
+              fuse:
+                type: int
+                required: false
+                choices:
+                  - 0
+                  - 1
+              keyctl:
+                type: int
+                required: false
+                choices:
+                  - 0
+                  - 1
+              mknod:
+                type: int
+                required: false
+                choices:
+                  - 0
+                  - 1
+              nesting:
+                type: int
+                required: false
+                choices:
+                  - 0
+                  - 1
+              mount:
+                type: str
+                required: false
+          cores:
+            type: int
+            required: false
+            default: 4
+          memory_mb:
+            type: int
+            required: false
+            default: 2048
+          swap_mb:
+            type: int
+            required: false
+            default: 1024
+          storage_gb:
+            type: int
+            required: false
+            default: 8
+          storage:
+            type: str
+            required: false
+            default: local-lvm
+            choices:
+              - local
+              - local-lvm
+          tags:
+            type: list
+            required: false
+            default:
+              - ansible
+            elements: str

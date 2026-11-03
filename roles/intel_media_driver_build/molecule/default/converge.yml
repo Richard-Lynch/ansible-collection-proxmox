@@ -1,0 +1,144 @@
+---
+# NOTE: nested ansible-playbook invocations below call `ansible-playbook` BY NAME, resolved
+# through PATH. A path built from VIRTUAL_ENV breaks where ansible is pip-installed without a
+# venv: it names a binary that does not exist, the task runs nothing, and a downstream assertion
+# blames the role. Whichever ansible runs this playbook is on PATH by definition.
+# Runs the REAL role twice: the normal dry run (bundled driver broken, nothing built), and a
+# refusal path where the GPU is still on vfio-pci. The build path is deliberately NOT exercised —
+# it needs a real toolchain and ~20 minutes.
+
+- name: Converge — the real role against a representative host
+  hosts: localhost
+  gather_facts: true
+  environment:
+    PATH: "/tmp/molecule-ihd/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  vars:
+    fake_root: /tmp/molecule-ihd
+  tasks:
+    - name: Reset the scratch tree
+      ansible.builtin.file: { path: "{{ fake_root }}", state: absent }
+
+    - name: Create the scratch dirs
+      ansible.builtin.file:
+        path: "{{ fake_root }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: [bin, bin-vfio, "sys/bus/pci/devices/0000:01:00.0/drm"]
+
+    - name: Stage the Arc's render node
+      # renderD129 on the Arc specifically. A role that probed "the first renderD*" would find the
+      # iGPU's node and report a broken card as healthy.
+      ansible.builtin.file:
+        path: "{{ fake_root }}/sys/bus/pci/devices/0000:01:00.0/drm/renderD129"
+        state: touch
+        mode: "0660"
+
+    - name: Install the fake tools
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/files/{{ item }}"
+        dest: "{{ fake_root }}/bin/{{ item }}"
+        mode: "0755"
+      loop: [lspci, pct]
+
+    - name: Confirm the fakes shadow the real tools
+      # `shell`, NOT `command`: `command -v` is a SHELL BUILTIN, so the command module looks for an
+      # executable literally named `command`. Works on macOS (which ships /usr/bin/command) and
+      # fails on Linux, which does not.
+      ansible.builtin.shell: { cmd: command -v lspci }
+      register: _which
+      changed_when: false
+
+    - name: Assert the shadowing took effect
+      ansible.builtin.assert:
+        that:
+          - _which.stdout | trim == fake_root ~ '/bin/lspci'
+        fail_msg: "PATH override did not take effect — got '{{ _which.stdout | trim }}'."
+        quiet: true
+
+    # --- run 1: dry run against the broken bundled driver ---------------------------------------
+    - name: Run the role in dry-run mode
+      ansible.builtin.include_role:
+        name: intel_media_driver_build
+      vars:
+        imd_ctid: 101  # an example guest id
+        imd_device_id: "8086:e20c"
+        imd_media_driver_ref: "c3e1867d6de236102951ee40a75319dbf54beb79"
+        imd_apply: false
+        imd_sysfs_base: "{{ fake_root }}/sys/bus/pci/devices"
+
+    - name: Capture the dry-run state
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/captured.json"
+        mode: "0644"
+        content: |
+          {{ {
+               'addr': _imd_addr,
+               'driver': _imd_drv,
+               'node': _imd_node,
+               'ct': _imd_ct,
+               'has_patched': (_imd_has_patched | string),
+               'ok_before': (_imd_ok_before | string),
+               'profiles_before': (_imd_profiles_before | default([])),
+               'raw_before': (_imd_raw_before | default('')),
+             } | to_nice_json }}
+
+# --- run 2: the vfio refusal path ----------------------------------------------------------------
+- name: Converge — the vfio-pci refusal path
+  hosts: localhost
+  gather_facts: false
+  vars:
+    fake_root: /tmp/molecule-ihd
+  tasks:
+    - name: Install an lspci reporting the Arc still on vfio-pci
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/bin-vfio/lspci"
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          if [[ "$*" == *"-vv"*"0000:01:00.0"* ]]; then
+            echo '0000:01:00.0 VGA compatible controller: Intel Corporation Battlemage G21'
+            echo '	Kernel driver in use: vfio-pci'
+          elif [[ "$*" == *"-Dnn"* ]]; then
+            echo '0000:01:00.0 VGA compatible controller [0300]: Intel Corporation Battlemage G21 [Intel Graphics] [8086:e20c]'
+          fi
+          exit 0
+
+    - name: Write the refusal play
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/refuse.yml"
+        mode: "0644"
+        content: |
+          - hosts: localhost
+            gather_facts: true
+            environment:
+              PATH: "{{ fake_root }}/bin-vfio:{{ fake_root }}/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            tasks:
+              - include_role:
+                  name: intel_media_driver_build
+                vars:
+                  imd_ctid: 101  # an example guest id
+                  imd_device_id: "8086:e20c"
+                  imd_media_driver_ref: "c3e1867d6de236102951ee40a75319dbf54beb79"
+                  imd_apply: true
+                  imd_sysfs_base: "{{ fake_root }}/sys/bus/pci/devices"
+
+    - name: Run it, expecting refusal
+      ansible.builtin.command:
+        cmd: >-
+          ansible-playbook
+          -i localhost, -c local {{ fake_root }}/refuse.yml
+      environment:
+        ANSIBLE_ROLES_PATH: "{{ (playbook_dir ~ '/../../..') | realpath }}"
+        ANSIBLE_STDOUT_CALLBACK: default
+        ANSIBLE_LOAD_CALLBACK_PLUGINS: "0"
+      register: _refuse
+      changed_when: false
+      failed_when: false
+
+    - name: Record the refusal result
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/refuse.json"
+        mode: "0644"
+        content: |
+          {{ {'rc': _refuse.rc,
+              'output': ((_refuse.stdout | default('')) ~ (_refuse.stderr | default('')))} | to_nice_json }}

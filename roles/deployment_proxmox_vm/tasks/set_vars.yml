@@ -1,0 +1,59 @@
+---
+- name: Apply defaults to deployment_proxmox_vm
+  ansible.builtin.set_fact:
+    deployment_proxmox_vm_ci__: |
+      {{ (deployment_proxmox_vm_ci__default | ansible.builtin.combine(deployment_proxmox_vm_ci, recursive=True)) if deployment_proxmox_vm_ci is defined else deployment_proxmox_vm_ci__default }}
+    deployment_proxmox_vm_machine__: |
+      {{ deployment_proxmox_vm_machine__default | ansible.builtin.combine(deployment_proxmox_vm_machine, recursive=True) }}
+
+# TODO either auto generate this or remove
+# - name: Verify defaults applied correctly
+#   ansible.builtin.validate_argument_spec:
+#     argument_spec:
+#       deployment_proxmox_vm_ci__:
+#         type: "dict"
+#         required: true
+#         options:
+#           user:
+#             type: "str"
+#             required: true
+#           password:
+#             type: "str"
+#             required: true
+#           upgrade:
+#             type: "bool"
+#             required: true
+#       deployment_proxmox_vm_machine__:
+#         type: "dict"
+#         required: true
+#         options:
+#           name:
+#             type: "str"
+#             required: true
+#           vmid:
+#             type: "int"
+#             required: true
+#           tags:
+#             type: "list"
+#             elements: "str"
+#             required: true
+#           storage_target:
+#             type: "str"
+#             required: true
+#           # TODO break this up properly
+#           ipconfig:
+#             type: dict
+#             required: true
+#           size:
+#             type: "str"
+#             required: true
+#           cores:
+#             type: "int"
+#             required: true
+#           memory:
+#             type: "int"
+#             required: true
+
+#     provided_arguments:
+#       deployment_proxmox_vm_ci__: "{{ deployment_proxmox_vm_ci__ }}"
+#       deployment_proxmox_vm_machine__: "{{ deployment_proxmox_vm_machine__ }}"

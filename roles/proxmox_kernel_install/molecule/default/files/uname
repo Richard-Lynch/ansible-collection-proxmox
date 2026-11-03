@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+[ "$1" = "-r" ] && echo "6.8.12-4-pve" || echo "Linux"
+exit 0

@@ -1,0 +1,8 @@
+---
+deployment_proxmox_lxc_const:
+  type: "lxc"
+
+  utils_verify_connection_wait_timeout: 120
+  utils_verify_connection_wait_connect_timeout: 60
+  utils_verify_connection_wait_delay: 0
+  utils_verify_connection_wait_sleep: 1

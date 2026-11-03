@@ -1,0 +1,26 @@
+---
+# Derived, not user-set. Overridable by the molecule scenario (include_role vars outrank role vars)
+# so the real role can be exercised against a fixture tree.
+
+# systemd-boot's cmdline file. PVE uses this on EFI/ZFS installs managed by proxmox-boot-tool.
+_gpu_cmdline_file: /etc/kernel/cmdline
+
+# grub's defaults file, and the variable inside it that carries the kernel cmdline. A host where
+# proxmox-boot-tool reports "no /etc/kernel/proxmox-boot-uuids" is a grub host, so this is a
+# primary path, not a fallback.
+_gpu_grub_file: /etc/default/grub
+_gpu_grub_key: GRUB_CMDLINE_LINUX_DEFAULT
+
+# The file actually written and backed up, chosen by the detected bootloader. Kept as one var so the
+# backup, read-back, rollback message and failure text can never disagree about which file is
+# involved — an inconsistency there would print a rollback command for the wrong file.
+_gpu_target_file: "{{ _gpu_cmdline_file if _gpu_bootloader | default('') == 'systemd-boot' else _gpu_grub_file }}"
+
+# How the change is installed into the bootloader. Without this step the config file is edited but
+# the installed boot entries keep the old cmdline, so the change silently never takes effect.
+_gpu_refresh_cmd: "{{ 'proxmox-boot-tool refresh' if _gpu_bootloader | default('') == 'systemd-boot' else 'update-grub' }}"
+
+# Timestamp for the backup filename. Computed ONCE here from ansible_facts.date_time so every task
+# in a run refers to the same backup path — deriving it inline per-task would produce a different
+# name in each task and the rollback message would point at a file that does not exist.
+_gpu_backup_stamp: "{{ ansible_facts['date_time']['iso8601_basic_short'] | default('nodate') }}"

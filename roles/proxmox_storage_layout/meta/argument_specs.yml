@@ -1,0 +1,84 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/proxmox_storage_layout/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate proxmox_storage_layout
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Dedicated PVE backup Directory storage on a thin LV (off the root LV)
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      proxmox_storage_layout_vg:
+        description:
+          - LVM volume group.
+        type: str
+        required: false
+        default: pve
+      proxmox_storage_layout_thinpool:
+        description:
+          - Thin pool to carve the backup LV from.
+        type: str
+        required: false
+        default: data
+      proxmox_storage_layout_backup_lv:
+        description:
+          - Name of the dedicated backup thin LV.
+        type: str
+        required: false
+        default: vzbackup
+      proxmox_storage_layout_backup_size:
+        description:
+          - Virtual size of the backup LV (thin-provisioned), e.g. `200G`. Sized to the
+          - node's thin pool, so the caller declares it.
+        type: str
+        required: true
+      proxmox_storage_layout_backup_fstype:
+        description:
+          - Filesystem for the backup LV.
+        type: str
+        required: false
+        default: ext4
+      proxmox_storage_layout_backup_mount:
+        description:
+          - Mount point for the backup volume.
+        type: str
+        required: false
+        default: /var/lib/vz-backups
+      proxmox_storage_layout_pve_storage_id:
+        description:
+          - PVE Directory storage id to register.
+        type: str
+        required: false
+        default: local-backups
+      proxmox_storage_layout_pve_content:
+        description:
+          - Content types for the storage.
+        type: str
+        required: false
+        default: backup,iso,vztmpl
+      proxmox_storage_layout_pve_nodes:
+        description:
+          - Node(s) the storage is available on, comma-separated (the thin LV is
+          - node-local). Derived from proxmox_storage_layout_backup_nodes.
+        type: str
+        required: false
+      proxmox_storage_layout_backup_nodes:
+        description:
+          - Every node that has (or will have) the backup LV mounted. The storage is
+          - advertised on all of them, so a cluster-wide vzdump job can write on every
+          - node; listing only the node running the role makes every other node's
+          - guests fail to back up.
+        type: list
+        required: true
+        elements: str
+      proxmox_storage_layout_prune:
+        description:
+          - Storage-level prune-backups policy.
+        type: str
+        required: false
+        default: keep-daily=3,keep-weekly=2,keep-monthly=1

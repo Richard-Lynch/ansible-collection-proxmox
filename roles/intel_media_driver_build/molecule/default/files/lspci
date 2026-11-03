@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Fake lspci: an integrated GPU on i915 and a discrete Arc on xe.
+if [[ "$*" == *"-vv"*"0000:01:00.0"* ]]; then
+  echo '0000:01:00.0 VGA compatible controller: Intel Corporation Battlemage G21'
+  echo '	Kernel driver in use: xe'
+elif [[ "$*" == *"-Dnn"* ]]; then
+  echo '0000:00:02.0 VGA compatible controller [0300]: Intel Corporation UHD Graphics 770 [8086:4680] (rev 0c)'
+  echo '0000:01:00.0 VGA compatible controller [0300]: Intel Corporation Battlemage G21 [Intel Graphics] [8086:e20c]'
+fi
+exit 0

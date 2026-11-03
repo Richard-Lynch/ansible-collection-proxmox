@@ -1,0 +1,29 @@
+---
+# AUTO-GENERATED defaults file — DO NOT EDIT.
+#
+# Source of truth: roles/deployment_proxmox_vm/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate deployment_proxmox_vm
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+# Entrypoint:      main
+
+# Cloud-init settings for the clone. The login user and password have no default: a
+# well-known default credential would be a usable login on every VM that omitted them.
+deployment_proxmox_vm_ci__default:
+  upgrade: true
+deployment_proxmox_vm_machine__default:
+  ipconfig:
+    ipconfig0:
+      ip: dhcp
+    ipconfig1:
+      ip: dhcp
+    ipconfig2:
+      ip: dhcp
+  cores: 2
+  memory: 8192
+  size: 32G
+  storage_target: local-lvm
+  tags:
+    - ansible

@@ -1,0 +1,111 @@
+---
+# Re-render the good declaration and check the text the cluster would receive.
+- name: Verify
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Render
+      ansible.builtin.include_role:
+        name: proxmox_guest_firewall
+      vars:
+        proxmox_guest_firewall_render_only: true
+        proxmox_guest_firewall_nodes: [{name: pve1, address: 192.0.2.10}]
+        proxmox_guest_firewall_ipsets:
+          management: [{cidr: 192.0.2.10, comment: node}]
+        proxmox_guest_firewall_guests:
+          - name: g1
+            vmid: 100
+            node: pve1
+            type: lxc
+            rules:
+              - {dir: in, proto: tcp, dport: "22", source: +management, comment: ssh}
+              - {dir: out, action: DROP, dest: 203.0.113.0/24, comment: no lateral}
+
+    - name: The datacenter switch and the IPSet are in cluster.fw, and nothing else is
+      ansible.builtin.assert:
+        that:
+          - "'enable: 1' in _c"
+          - "'policy_in: ACCEPT' in _c"
+          - "'[IPSET management]' in _c"
+          - "'192.0.2.10 # node' in _c"
+          - "'[RULES]' not in _c"
+        quiet: true
+      vars:
+        _c: "{{ proxmox_guest_firewall_rendered_cluster.splitlines() }}"
+
+    - name: The guest file carries the policies and each rule in Proxmox syntax, in order
+      ansible.builtin.assert:
+        that:
+          - "'policy_in: DROP' in _g"
+          - "'dhcp: 1' in _g"
+          - "_g.index('IN ACCEPT -source +management -p tcp -dport 22 -log nolog # ssh') < _g.index('OUT DROP -dest 203.0.113.0/24 -log nolog # no lateral')"
+        quiet: true
+      vars:
+        _g: "{{ proxmox_guest_firewall_rendered_guests['100'].splitlines() }}"
+
+    # The pmxcfs writer (_write_pmxcfs.yml), run for real against a scratch directory: a new file
+    # is WRITTEN, the same content again is UNCHANGED (a second apply reports changed=0), a
+    # different content is WRITTEN, and the bytes land exactly, with no newline added by stdin.
+    - name: Make a scratch directory for the writer
+      ansible.builtin.tempfile:
+        state: directory
+      register: _scratch
+
+    - name: Write a new file
+      ansible.builtin.include_role:
+        name: proxmox_guest_firewall
+        tasks_from: _write_pmxcfs
+      vars:
+        _pgf_write_path: "{{ _scratch.path }}/100.fw"
+        _pgf_write_content: "{{ proxmox_guest_firewall_rendered_guests['100'] }}"
+
+    - name: Record the first write
+      ansible.builtin.set_fact:
+        _first: "{{ _pgf_write }}"
+
+    - name: Write the same content again
+      ansible.builtin.include_role:
+        name: proxmox_guest_firewall
+        tasks_from: _write_pmxcfs
+      vars:
+        _pgf_write_path: "{{ _scratch.path }}/100.fw"
+        _pgf_write_content: "{{ proxmox_guest_firewall_rendered_guests['100'] }}"
+
+    - name: Record the second write
+      ansible.builtin.set_fact:
+        _second: "{{ _pgf_write }}"
+
+    - name: Write different content
+      ansible.builtin.include_role:
+        name: proxmox_guest_firewall
+        tasks_from: _write_pmxcfs
+      vars:
+        _pgf_write_path: "{{ _scratch.path }}/100.fw"
+        _pgf_write_content: changed-content
+
+    - name: Read the scratch directory
+      ansible.builtin.find:
+        paths: "{{ _scratch.path }}"
+        hidden: true
+      register: _left
+
+    - name: Read the final file
+      ansible.builtin.slurp:
+        path: "{{ _scratch.path }}/100.fw"
+      register: _final
+
+    - name: First write changed, the repeat did not, the third did; no temp file is left behind
+      ansible.builtin.assert:
+        that:
+          - _first is changed
+          - _second is not changed
+          - _pgf_write is changed
+          - (_final.content | b64decode) == 'changed-content'
+          - (_left.files | map(attribute='path') | map('basename') | list) == ['100.fw']
+        fail_msg: "first={{ _first.stdout | default('?') }} second={{ _second.stdout | default('?') }} left={{ _left.files | map(attribute='path') | list }}"
+        quiet: true
+
+    - name: Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ _scratch.path }}"
+        state: absent

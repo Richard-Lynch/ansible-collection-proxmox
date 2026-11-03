@@ -1,0 +1,57 @@
+---
+# Write ONE file on pmxcfs (/etc/pve) the way Proxmox's own PVE::Tools::file_set_contents does:
+# the content goes into "<dest>.tmp.<pid>" beside the target, then a rename over it. There is no
+# chmod, no chown and no utime. In: _pgf_write_path, _pgf_write_content.
+#
+# WHY NOT ansible.builtin.copy. pmxcfs fixes every file at 0640 root:www-data, and pve-cluster
+# (PVE 8) answers EPERM to a chmod to any other mode. Create, write and rename all work. The copy
+# module chmods on both of its paths: atomic_move's temp file in the target directory is chmodded
+# to the source's mode (EPERM on the temp name), and with unsafe_writes the content is written and
+# then the "creating" branch's os.chmod(dest, 0644) fails — so the task reports "Failed to copy"
+# AFTER the content has landed, which makes a successful write indistinguishable from a failed one.
+#
+# Idempotent by comparison, not by a flag: when the bytes already match, the temp file is
+# discarded and the task reports ok. A rename is atomic on pmxcfs, so pve-firewall (which
+# recompiles every 10 s) never reads a half-written cluster.fw.
+- name: "Write {{ _pgf_write_path }} (temp file + rename, as Proxmox does)"
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      dest={{ _pgf_write_path | quote }}
+      tmp="$dest.tmp.$$"
+      trap 'rm -f "$tmp"' EXIT
+      cat > "$tmp"
+      if [ -f "$dest" ] && cmp -s "$tmp" "$dest"; then
+        echo UNCHANGED
+      else
+        mv -f "$tmp" "$dest"
+        echo WRITTEN
+      fi
+    stdin: "{{ _pgf_write_content }}"
+    # The default appends a newline to stdin, so the file would never equal the rendered text.
+    stdin_add_newline: false
+  register: _pgf_write
+  changed_when: _pgf_write.stdout_lines | default([]) == ['WRITTEN']
+  failed_when: >-
+    _pgf_write.rc != 0
+    or (_pgf_write.stdout_lines | default([])) not in [['WRITTEN'], ['UNCHANGED']]
+
+# The read-back is the guard: a write that "succeeded" but left other bytes behind fails here.
+- name: "Read {{ _pgf_write_path }} back"
+  ansible.builtin.stat:
+    path: "{{ _pgf_write_path }}"
+    get_checksum: true
+    checksum_algorithm: sha1
+  register: _pgf_write_stat
+  when: _pgf_write is not skipped
+
+- name: "HARD GATE - {{ _pgf_write_path }} holds exactly the rendered content"
+  ansible.builtin.assert:
+    that:
+      - _pgf_write_stat.stat.exists
+      - _pgf_write_stat.stat.checksum == (_pgf_write_content | hash('sha1'))
+    fail_msg: >-
+      {{ _pgf_write_path }} reads back {{ _pgf_write_stat.stat.checksum | default('ABSENT') }},
+      the rendered content is {{ _pgf_write_content | hash('sha1') }}.
+    quiet: true
+  when: _pgf_write is not skipped

@@ -1,0 +1,5 @@
+---
+- name: Set vars
+  ansible.builtin.set_fact:
+    proxmox_iso_download_path: "/var/lib/vz/template/iso/{{ proxmox_iso_url | urlsplit('path') | basename }}"
+    proxmox_iso: "local:iso/{{ proxmox_iso_url | urlsplit('path') | basename }}"

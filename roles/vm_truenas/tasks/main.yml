@@ -1,0 +1,111 @@
+---
+- name: Set variables
+  ansible.builtin.include_tasks: set_vars.yml
+
+- name: Check if VM exists
+  block:
+    - name: Get VM info
+      community.general.proxmox_vm_info:
+        api_host: "{{ proxmox.api_host }}"
+        api_user: "{{ proxmox.user }}"
+        api_password: "{{ proxmox.password }}"
+
+        node: "{{ proxmox.node }}"
+        vmid: "{{ truenas_vm_id }}"
+      register: vm_stat
+    - name: Show vm_stat
+      ansible.builtin.debug:
+        var: vm_stat
+        verbosity: 1
+    - name: Set bool
+      ansible.builtin.set_fact:
+        is_vm_already_created: "{{ (vm_stat.proxmox_vms | length) > 0 }}"
+
+- name: Create the VM if needed
+  when: not is_vm_already_created
+  block:
+    - name: Download ISO
+      ansible.builtin.include_role:
+        name: richard_lynch.proxmox.proxmox_iso_download
+      vars:
+        proxmox_iso_url: "{{ truenas_vm_iso_url }}"
+
+    - name: Store location of ISO
+      ansible.builtin.set_fact:
+        truenas_vm_iso: "{{ proxmox_iso }}"
+        truenas_vm_iso_path: "{{ proxmox_iso_download_path }}"
+
+    - name: Create TrueNAS VM
+      community.general.proxmox_kvm:
+        api_host: "{{ proxmox.api_host }}"
+        node: "{{ proxmox.node }}"
+
+        api_user: "{{ proxmox.user }}"
+        api_password: "{{ proxmox.password }}"
+
+        state: present
+
+        vmid: "{{ truenas_vm_id }}"
+        name: "{{ truenas_vm_name }}"
+        onboot: true
+        startup: "order={{ truenas_vm_startup_order }}"
+        agent: true
+        tags:
+          - ansible
+          - truenas
+
+        machine: q35
+        bios: ovmf
+        ostype: l26
+        sockets: 1
+        cores: "{{ truenas_vm_cores }}"
+        memory: "{{ truenas_vm_memory }}"
+
+        boot: "order=scsi0;ide2"
+        bootdisk: scsi0
+
+        # Install media: removed after install is complete
+        ide:
+          ide2: "{{ truenas_vm_iso }},media=cdrom"
+
+        # Actual boot disk
+        scsihw: virtio-scsi-single
+        scsi:
+          scsi0: "{{ truenas_vm_storage }}:{{ truenas_vm_disk_size }},backup=0,cache=none,discard=on,iothread=1"
+
+        hostpci: "{{ truenas_vm_hostpci }}"
+
+        net:
+          net0: virtio,bridge={{ truenas_vm_bridge }},tag={{ truenas_vm_vlan.id }}
+
+        efidisk0:
+          storage: "{{ truenas_vm_storage }}"
+          format: raw
+          efitype: 4m
+          pre_enrolled_keys: 0
+
+    - name: Set vm_truenas_installed
+      ansible.builtin.set_fact:
+        vm_truenas: "{{ true }}"
+
+    - name: Start TrueNAS VM
+      community.general.proxmox_kvm:
+        api_host: "{{ proxmox.api_host }}"
+        api_user: "{{ proxmox.user }}"
+        api_password: "{{ proxmox.password }}"
+        node: "{{ proxmox.node }}"
+
+        vmid: "{{ truenas_vm_id }}"
+
+        state: started
+
+    - name: Complete install outside of ansible (😭)
+      ansible.builtin.pause:
+        prompt: "Complete TrueNAS install via CLI on proxmox UI: Select install disk"
+
+    - name: Cleanup boot media and restart
+      ansible.builtin.include_tasks: ./cleanup_boot.yml
+
+    - name: Configure outside of ansible (😭)
+      ansible.builtin.pause:
+        prompt: "Complete TrueNAS install via CLI on proxmox UI: Configure users via WebUI, enable SSH, add SSH key to root user, create API key"

@@ -1,0 +1,74 @@
+---
+- name: Verify — gates and plan
+  hosts: localhost
+  gather_facts: false
+  vars:
+    render_root: /tmp/molecule-proxmox-cloud-vm
+  tasks:
+    - name: Read the gate outcome and both plans
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      loop:
+        - "{{ render_root }}/gate-outcome.json"
+        - "{{ render_root }}/plan-good.json"
+        - "{{ render_root }}/plan-nostartup.json"
+      register: _r
+
+    - name: Parse them
+      ansible.builtin.set_fact:
+        gates: "{{ _r.results[0].content | b64decode | from_json }}"
+        good: "{{ _r.results[1].content | b64decode | from_json }}"
+        nostart: "{{ _r.results[2].content | b64decode | from_json }}"
+
+    - name: ASSERT — every bad input was refused by a gate
+      ansible.builtin.assert:
+        that:
+          - gates.survivors | length == 0
+          - gates.refused | sort == ['balloon-above-ceiling', 'image-dir-shell', 'image-http', 'image-moving-alias', 'image-short-sum', 'private-key'] | sort
+        fail_msg: "refused={{ gates.refused }} LET THROUGH={{ gates.survivors }}: a gate that has never been shown to fire."
+        quiet: true
+
+    - name: ASSERT — the create command puts the NIC on its VLAN, imports the verified image, and uses no shell
+      vars:
+        a: "{{ good.argv }}"
+      ansible.builtin.assert:
+        that:
+          - a[0:2] == ['qm', 'create']
+          - a[2] == '900'
+          - a[a.index('--net0') + 1] == 'virtio,bridge=vmbr0,tag=40'
+          - a[a.index('--scsi0') + 1] == 'local-lvm:0,import-from=/var/lib/vz/template/iso/ubuntu-24.04-server-cloudimg-amd64.img,discard=on,iothread=1'
+          - a[a.index('--agent') + 1] == 'enabled=1'
+          - a[a.index('--memory') + 1] == '6144'
+          - a[a.index('--balloon') + 1] == '4096'
+          - a[a.index('--cores') + 1] == '4'
+          - a[a.index('--startup') + 1] == 'order=215'
+          # tags are sorted so the stored form (PVE sorts) compares equal on the next converge
+          - a[a.index('--tags') + 1] == 'ansible;zeta'
+          - a[a.index('--ciuser') + 1] == 'ubuntu'
+          # the key is a FILE argument, never inline, and there is no password anywhere
+          - a[a.index('--sshkeys') + 1] == '/run/proxmox_cloud_vm-900.pub'
+          - "'--cipassword' not in a"
+          # the Ubuntu cloud image has no qemu-guest-agent: the VM is created with vendor-data that installs it
+          - a[a.index('--cicustom') + 1] == 'vendor=local:snippets/vm-900-vendor.yaml'
+          # every element is one argv word: nothing in it needs a shell to be understood
+          - a | select('search', ' ') | list == ['--description', 'a worker'] or a | select('search', ' ') | list == ['a worker']
+        quiet: true
+
+    - name: ASSERT — the desired settings are what a converge compares (and only those)
+      ansible.builtin.assert:
+        that:
+          - good.desired.keys() | sort | list == ['balloon', 'cores', 'description', 'memory', 'onboot', 'startup', 'tags']
+          - good.desired.onboot == 1
+          - good.desired.tags == 'ansible;zeta'
+          - "'qemu-guest-agent' in good.vendor"
+          - good.vendor is match('#cloud-config')
+          - good.image_path == '/var/lib/vz/template/iso/ubuntu-24.04-server-cloudimg-amd64.img'
+        quiet: true
+
+    - name: ASSERT — near-miss, with no startup order there is no --startup and balloon 0 is passed explicitly
+      ansible.builtin.assert:
+        that:
+          - "'--startup' not in nostart.argv"
+          - "'startup' not in nostart.desired"
+          - nostart.argv[nostart.argv.index('--balloon') + 1] == '0'
+        quiet: true

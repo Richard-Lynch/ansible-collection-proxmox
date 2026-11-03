@@ -1,0 +1,43 @@
+# Offline test: exercise the REAL role's job-match + needs-update decisions with no live Proxmox
+# cluster. converge.yml puts a fake `pvesh` on PATH and runs the actual task file, so a regression
+# in roles/proxmox_vzdump/tasks/main.yml turns this red — the previous version re-derived the
+# role's filter chain in the scenario and asserted the copy against itself, which stayed green
+# through any change to the role.
+---
+dependency:
+  name: galaxy
+driver:
+  name: default
+platforms:
+  - name: localhost
+provisioner:
+  name: ansible
+  # Molecule runs from the scenario directory, so the repo's ansible.cfg roles_path (./roles) does
+  # not resolve. Pointed at the repo root explicitly so converge.yml can include_role the role
+  # under test — which is what makes this a real test of the role's own code rather than a
+  # re-derivation of its logic in the scenario.
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../"
+    # Dependencies (galaxy.yml) are installed into collections.galaxy/ at the repo root; the
+    # second entry resolves this collection itself when the checkout sits at
+    # ansible_collections/richard_lynch/proxmox. molecule does not read a repo ansible.cfg.
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../collections.galaxy:${MOLECULE_PROJECT_DIRECTORY}/../../../../.."
+  inventory:
+    host_vars:
+      localhost:
+        ansible_connection: local
+  playbooks:
+    converge: converge.yml
+    verify: verify.yml
+verifier:
+  name: ansible
+# The stock `idempotence` action does not apply to this scenario and is removed deliberately,
+# not to silence a real failure. It re-runs converge and demands zero `changed` — but converge
+# here REPLAYS three fixed cluster states rather than converging on one, and case B feeds a
+# permanently-drifted job precisely so the role must issue `pvesh set` every time. A second run
+# is therefore expected to change things, and must not be read as the role being non-idempotent.
+#
+# Role idempotence IS still tested, and more precisely than this action could: verify.yml asserts
+# that the in-sync case (A) issues NO pvesh write at all, which is the actual property at stake.
+scenario:
+  test_sequence: [syntax, converge, verify]

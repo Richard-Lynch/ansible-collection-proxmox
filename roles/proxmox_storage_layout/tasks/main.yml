@@ -1,0 +1,185 @@
+---
+# Reconcile the dedicated backup Directory storage (thin LV → ext4 → mount → PVE storage).
+# All steps idempotent; guest disks (vm-*, base-*) are never touched.
+
+- name: Check whether the backup thin LV already exists
+  ansible.builtin.command:
+    cmd: "lvs --noheadings -o lv_name {{ proxmox_storage_layout_vg }}/{{ proxmox_storage_layout_backup_lv }}"
+  register: _blv
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Create the backup thin LV in the pool (when absent)
+  ansible.builtin.command:
+    cmd: >-
+      lvcreate -V {{ proxmox_storage_layout_backup_size }}
+      -T {{ proxmox_storage_layout_vg }}/{{ proxmox_storage_layout_thinpool }}
+      -n {{ proxmox_storage_layout_backup_lv }}
+  when: _blv.rc != 0
+  register: _lvcreate
+  changed_when: _lvcreate.rc == 0
+
+- name: Path to the LV device
+  ansible.builtin.set_fact:
+    _lv_dev: "/dev/{{ proxmox_storage_layout_vg }}/{{ proxmox_storage_layout_backup_lv }}"
+
+- name: Detect existing filesystem on the LV (never reformat a populated volume)
+  ansible.builtin.command:
+    cmd: "blkid -o value -s TYPE {{ _lv_dev }}"
+  register: _fstype
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Format the LV (only if it has NO filesystem yet)
+  community.general.filesystem:
+    fstype: "{{ proxmox_storage_layout_backup_fstype }}"
+    dev: "{{ _lv_dev }}"
+  when: _fstype.stdout | trim | length == 0
+
+- name: Ensure the mount point exists
+  ansible.builtin.file:
+    path: "{{ proxmox_storage_layout_backup_mount }}"
+    state: directory
+    mode: "0755"
+
+- name: Mount the backup volume (+ persist in fstab)
+  ansible.posix.mount:
+    path: "{{ proxmox_storage_layout_backup_mount }}"
+    src: "{{ _lv_dev }}"
+    fstype: "{{ proxmox_storage_layout_backup_fstype }}"
+    opts: "defaults,nofail"
+    state: mounted
+
+# --- CLUSTER-SHARED FROM HERE DOWN ---------------------------------------------------------
+# Everything above is PER-NODE: each node gets its own thin LV, its own ext4, its own mount at
+# /var/lib/vz-backups. A `dir` storage listing several nodes means "this path exists on all of
+# these", not "shared filesystem" — so that half MUST run on every node.
+#
+# Everything below writes /etc/pve/storage.cfg, which is CLUSTER-SHARED: the same file on every
+# node, backed by pmxcfs. A play over all nodes would otherwise run these tasks once per node
+# against one file — and worse, every node reads the current node list before any of them writes
+# it, so each decides independently what to reconcile from the same stale snapshot. When the
+# declared node set differs from what is deployed, concurrent `pvesm set` calls race on one file.
+#
+# run_once, NOT `hosts: <one node>`: this role does per-node work as well, so narrowing the play
+# to one node would silently skip the LV and mount on every other node.
+#
+# run_once picks the first host in the play rather than a named node, so it still works when the
+# play is limited to a single node.
+- name: Check whether the PVE storage is already registered
+  ansible.builtin.command:
+    cmd: "pvesm status --storage {{ proxmox_storage_layout_pve_storage_id }}"
+  register: _pvesm
+  run_once: true
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Register the PVE Directory storage for backups (when absent)
+  ansible.builtin.command:
+    argv:
+      - pvesm
+      - add
+      - dir
+      - "{{ proxmox_storage_layout_pve_storage_id }}"
+      - "--path"
+      - "{{ proxmox_storage_layout_backup_mount }}"
+      - "--content"
+      - "{{ proxmox_storage_layout_pve_content }}"
+      - "--nodes"
+      - "{{ proxmox_storage_layout_pve_nodes }}"
+      - "--prune-backups"
+      - "{{ proxmox_storage_layout_prune }}"
+  when: _pvesm.rc != 0
+  register: _pvesm_add
+  run_once: true
+  changed_when: _pvesm_add.rc == 0
+
+# The `add` above only fires when the storage does NOT exist. Without the reconcile below, changing
+# proxmox_storage_layout_pve_nodes would silently do NOTHING on a cluster where the storage was
+# already created — leaving it pinned to a single node, so a cluster-wide vzdump job skips every
+# other node's guests. A setting that cannot apply itself to existing state is not a fix.
+- name: Read the storage's current node restriction
+  ansible.builtin.shell:
+    cmd: "set -o pipefail; awk '/^dir: {{ proxmox_storage_layout_pve_storage_id }}$/,/^$/' /etc/pve/storage.cfg | awk '/nodes/ {print $2}'"
+    executable: /bin/bash
+  register: _cur_nodes
+  run_once: true
+  changed_when: false
+  check_mode: false
+
+- name: Reconcile the storage's node list (when it drifted from the declared set)
+  ansible.builtin.command:
+    argv:
+      - pvesm
+      - set
+      - "{{ proxmox_storage_layout_pve_storage_id }}"
+      - "--nodes"
+      - "{{ proxmox_storage_layout_pve_nodes }}"
+  when:
+    - _pvesm.rc == 0
+    - (_cur_nodes.stdout | default('') | trim | split(',') | sort) != (proxmox_storage_layout_pve_nodes | split(',') | sort)
+  register: _pvesm_set
+  run_once: true
+  changed_when: _pvesm_set.rc == 0
+
+# Same gap, same fix, for retention: `pvesm add --prune-backups` runs only when the storage is
+# created, so changing proxmox_storage_layout_prune on an existing storage would do nothing. Both
+# sides are sorted into the alphabetical key order PVE writes, since the declared string is not.
+- name: Read the storage's current retention
+  ansible.builtin.shell:
+    cmd: "set -o pipefail; awk '/^dir: {{ proxmox_storage_layout_pve_storage_id }}$/,/^$/' /etc/pve/storage.cfg | awk '/prune-backups/ {print $2}'"
+    executable: /bin/bash
+  register: _cur_prune
+  run_once: true
+  changed_when: false
+  check_mode: false
+
+- name: Reconcile the storage's retention (when it drifted from the declared policy)
+  ansible.builtin.command:
+    argv:
+      - pvesm
+      - set
+      - "{{ proxmox_storage_layout_pve_storage_id }}"
+      - "--prune-backups"
+      - "{{ proxmox_storage_layout_prune }}"
+  when:
+    - _pvesm.rc == 0
+    - (_cur_prune.stdout | default('') | trim | split(',') | sort) != (proxmox_storage_layout_prune | split(',') | sort)
+  register: _pvesm_prune_set
+  run_once: true
+  changed_when: _pvesm_prune_set.rc == 0
+
+- name: Read the retention back (every run, not only after a change)
+  ansible.builtin.shell:
+    cmd: "set -o pipefail; awk '/^dir: {{ proxmox_storage_layout_pve_storage_id }}$/,/^$/' /etc/pve/storage.cfg | awk '/prune-backups/ {print $2}'"
+    executable: /bin/bash
+  register: _prune_after
+  run_once: true
+  changed_when: false
+  check_mode: false
+
+- name: HARD GATE — the storage must hold the retention we declared
+  ansible.builtin.assert:
+    that:
+      - (_prune_after.stdout | default('') | trim | split(',') | sort) == (proxmox_storage_layout_prune | split(',') | sort)
+    fail_msg: >-
+      After `pvesm set`, storage.cfg holds prune-backups '{{ _prune_after.stdout | default('') | trim }}'
+      but '{{ proxmox_storage_layout_prune }}' was declared.
+    quiet: true
+  run_once: true
+  when: not ansible_check_mode # under --check the set above did not run, so drift is expected
+
+- name: Verify the storage is active
+  ansible.builtin.command:
+    cmd: "pvesm status --storage {{ proxmox_storage_layout_pve_storage_id }}"
+  register: _pvesm_verify
+  run_once: true
+  changed_when: false
+  check_mode: false
+
+- name: Report
+  ansible.builtin.debug:
+    msg: "{{ proxmox_storage_layout_pve_storage_id }} ready: {{ _pvesm_verify.stdout_lines | select('search', proxmox_storage_layout_pve_storage_id) | list }}"

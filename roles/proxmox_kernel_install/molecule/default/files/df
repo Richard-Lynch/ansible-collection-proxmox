@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Fake df: ample /boot headroom (~63G free).
+echo "Filesystem 1M-blocks Used Available Use% Mounted on"
+echo "/dev/mapper/pve-root 96000 27000 64500 30% /"
+exit 0

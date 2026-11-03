@@ -1,0 +1,21 @@
+---
+# Offline: runs the REAL role against fake lspci/vainfo/dpkg-query reproducing the failing
+# case (Arc bound to xe, its own renderD129, vainfo failing with va_openDriver() returns -1).
+#
+# Coverage: beyond the "parse/check" tier. The device
+# resolution, the vfio refusal, the before/after probe logic and the outcome gate are all real and
+# genuinely asserted.
+# NOT covered, and not claimed: the apt transaction, the backports pin taking effect, and whether a
+# newer libva actually fixes a given GPU — that only a run on real hardware answers.
+dependency: { name: galaxy }
+driver: { name: default }
+platforms: [{ name: localhost }]
+provisioner:
+  name: ansible
+  inventory: { host_vars: { localhost: { ansible_connection: local } } }
+  playbooks: { converge: converge.yml, verify: verify.yml }
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../"
+verifier: { name: ansible }
+scenario:
+  test_sequence: [syntax, converge, verify]

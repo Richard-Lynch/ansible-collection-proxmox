@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  namespace: richard_lynch
+  author: Richard Lynch
+  description: >-
+    Create a TrueNAS VM on a Proxmox VE node from an installer ISO, with optional PCI passthrough
+    and a VLAN-tagged NIC, pause for the manual install, then detach the ISO and restart. Skips
+    everything if the VM already exists.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  galaxy_tags: [proxmox, vm, truenas, storage]
+dependencies: []

@@ -1,0 +1,34 @@
+---
+# proxmox_ci_access — create a least-privilege PVE user + role + API token for CI.
+# Runs pveum on a PVE node (idempotent). The token secret is captured and must be stored by the
+# caller in its secret manager — this role prints it once on first creation and never persists it.
+
+# proxmox_ci_access_user / _role / _token (REQUIRED, no default): the identity's names are the
+# caller's to choose; the token id is <user>!<token>.
+
+# Least-privilege privilege set: manage guests (create/config/power/destroy) + read the host.
+# Deliberately EXCLUDES Sys.Modify / Realm.* / User.Modify / Permissions.Modify so the CI user can't
+# reconfigure the host, mint tokens, or escalate.
+proxmox_ci_access_privs:
+  - VM.Allocate
+  - VM.Audit
+  - VM.Config.Disk
+  - VM.Config.CPU
+  - VM.Config.Memory
+  - VM.Config.Network
+  - VM.Config.Options
+  - VM.PowerMgmt
+  - Datastore.Allocate
+  - Datastore.AllocateSpace
+  - Datastore.Audit
+  - Sys.Audit
+  - SDN.Use # required to attach a guest NIC to a VLAN-tagged bridge
+
+# ACL path the role is granted on (cluster-wide guest ops).
+proxmox_ci_access_acl_path: "/"
+
+# privsep=1 → the token has its OWN privileges (not the user's) — must ACL the token too.
+proxmox_ci_access_token_privsep: 1
+
+# Secret-manager item the caller stores the token in; only named in the one-time message.
+proxmox_ci_access_secret_name: ""

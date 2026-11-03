@@ -1,0 +1,8 @@
+---
+- name: Verify
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Placeholder (assertions run in converge)
+      ansible.builtin.debug:
+        msg: "proxmox_storage_layout defaults verified in converge."

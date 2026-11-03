@@ -1,0 +1,69 @@
+---
+# READ-ONLY: slurp what is on pmxcfs now and say, line by line, what the rendered files would add
+# and remove. Nothing is written.
+- name: Stat the live firewall files
+  ansible.builtin.stat:
+    path: "{{ proxmox_guest_firewall_fw_dir }}/{{ item }}"
+  register: _pgf_stat
+  loop: "{{ ['cluster.fw'] + (proxmox_guest_firewall_guests | map(attribute='vmid') | map('string') | map('regex_replace', '$', '.fw') | list) }}"
+
+- name: Read the live firewall files that exist
+  ansible.builtin.slurp:
+    path: "{{ item.stat.path }}"
+  register: _pgf_slurp
+  loop: "{{ _pgf_stat.results | selectattr('stat.exists') | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Index the live files by name (empty string when absent)
+  ansible.builtin.set_fact:
+    proxmox_guest_firewall_current: >-
+      {{ dict(_pgf_stat.results | map(attribute='item') | zip(_pgf_stat.results | map(attribute='item') | map('regex_replace', '^.*$', '') | list))
+         | combine(dict(_pgf_slurp.results | map(attribute='item.item')
+                        | zip(_pgf_slurp.results | map(attribute='content') | map('b64decode')))) }}
+
+- name: Index the rendered files by name
+  ansible.builtin.set_fact:
+    _pgf_rendered_all: >-
+      {{ {'cluster.fw': proxmox_guest_firewall_rendered_cluster}
+         | combine(dict(proxmox_guest_firewall_rendered_guests | dict2items | map(attribute='key')
+                        | map('regex_replace', '$', '.fw')
+                        | zip(proxmox_guest_firewall_rendered_guests | dict2items | map(attribute='value')))) }}
+
+- name: Build the per-file change set (content lines only; comments and blanks ignored)
+  ansible.builtin.set_fact:
+    proxmox_guest_firewall_changes: >-
+      {{ proxmox_guest_firewall_changes | default({}) | combine({item.key: {
+           'exists': (proxmox_guest_firewall_current[item.key] | default('') | length) > 0,
+           'add': _want | difference(_have),
+           'remove': _have | difference(_want)}}) }}
+  loop: "{{ _pgf_rendered_all | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  vars:
+    _want: "{{ item.value.splitlines() | map('trim') | reject('match', '^(#|$)') | list }}"
+    _have: "{{ (proxmox_guest_firewall_current[item.key] | default('') | string).splitlines() | map('trim') | reject('match', '^(#|$)') | list }}"
+
+- name: Name the guests whose rules would be INERT (no firewall=1 on any NIC)
+  ansible.builtin.set_fact:
+    proxmox_guest_firewall_inert: >-
+      {{ proxmox_guest_firewall_guests | map(attribute='name')
+         | select('in', (proxmox_guest_firewall_live.guest_nics | default({}) | dict2items
+                         | rejectattr('value', 'search', 'firewall=1') | map(attribute='key') | list))
+         | list }}
+  when: not (proxmox_guest_firewall_render_only | bool)
+
+- name: PREVIEW (nothing was written)
+  ansible.builtin.debug:
+    msg:
+      - "PREVIEW ONLY. action={{ proxmox_guest_firewall_action }}. Nothing was written."
+      - >-
+        !!! CLUSTER-WIDE: cluster.fw sets the DATACENTER firewall enable={{ proxmox_guest_firewall_cluster_options.enable }}
+        (live now: {{ proxmox_guest_firewall_live.datacenter_enabled | default('not read') }}). That switch
+        applies to EVERY node ({{ proxmox_guest_firewall_nodes | map(attribute='name') | join(', ') }}) and turns on
+        each node's host filtering. Policies stay {{ proxmox_guest_firewall_cluster_options.policy_in }}/{{
+        proxmox_guest_firewall_cluster_options.policy_out }}, so node traffic is not dropped; only guests whose own
+        options say enable=1 are filtered.
+      - "IPSets: {{ proxmox_guest_firewall_ipsets }}"
+      - "changes per file: {{ proxmox_guest_firewall_changes }}"
+      - "guests whose rules stay INERT until a NIC carries firewall=1 (apply sets it; LXC NIC is re-plugged): {{ proxmox_guest_firewall_inert | default('not read') }}"

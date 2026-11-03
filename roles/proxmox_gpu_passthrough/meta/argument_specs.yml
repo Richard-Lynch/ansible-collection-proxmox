@@ -1,0 +1,116 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/proxmox_gpu_passthrough/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate proxmox_gpu_passthrough
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Free a GPU from vfio-pci on a Proxmox host so the host driver can bind it
+    description:
+      - Adds an ACS override to the kernel cmdline so a GPU that shares an IOMMU group
+      - with a device passed through to a VM can be claimed by the host's own driver
+      - (xe/i915/amdgpu) instead of vfio-pci, and installs the firmware/userspace that
+      - driver needs.
+      - ''
+      - "Generate-don't-apply: the default run reports the diff and writes nothing."
+      - Set gpu_passthrough_apply=true to write. The role NEVER reboots (the change only
+      - takes effect at the next boot) and NEVER edits the vfio-pci ids= line, whose other
+      - entries are typically passed through to running VMs.
+      - ''
+      - Every file it writes is backed up to <file>.bak-<timestamp>, and the exact
+      - rollback command is printed after applying.
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      gpu_passthrough_device_id:
+        description:
+          - PCI vendor:device of the GPU to free, e.g. '8086:e20c' for an Intel Arc
+          - '(Battlemage) card. Required and never defaulted: the role must not guess which card to'
+          - act on. Matched against lspci; the role fails if no such display device
+          - is present.
+        type: str
+        required: true
+      gpu_passthrough_apply:
+        description:
+          - false (default) reports the planned cmdline change and writes nothing.
+          - true writes the cmdline, refreshes the bootloader and installs packages.
+          - A reboot is still required afterwards and is never performed here.
+        type: bool
+        required: false
+        default: false
+      gpu_passthrough_cmdline_tokens:
+        description:
+          - Kernel cmdline tokens to ADD. Merged as a union with the existing line —
+          - the current cmdline is never rewritten wholesale, which also makes the
+          - role idempotent.
+          - pcie_acs_override weakens PCIe isolation between devices that shared an
+          - IOMMU group; it is the deliberate trade-off that makes host use of the GPU
+          - possible, and is listed here so the choice is visible in inventory.
+        type: list
+        required: false
+        default:
+          - pcie_acs_override=downstream,multifunction
+        elements: str
+      gpu_passthrough_vfio_conf:
+        description:
+          - "Path to vfio-pci's by-ID binding config. READ ONLY: the role asserts the"
+          - GPU is not listed there and stops if it is, but never edits the file.
+        type: str
+        required: false
+        default: /etc/modprobe.d/vfio-pci.conf
+      gpu_passthrough_install_packages:
+        description:
+          - Install gpu_passthrough_packages (firmware + VA-API userspace).
+        type: bool
+        required: false
+        default: true
+      gpu_passthrough_require_driver:
+        description:
+          - Refuse to proceed unless some driver on the RUNNING kernel actually carries
+          - a PCI alias for gpu_passthrough_device_id.
+          - ''
+          - This is the check that decides whether the change is worth a reboot at all.
+          - "Example: PVE 8's 6.8 kernels ship xe.ko but neither xe nor"
+          - i915 has an alias for 8086:e20c (Battlemage support arrives ~6.12), so
+          - freeing the card from vfio-pci would bind nothing — a result
+          - indistinguishable afterwards from the ACS override having failed.
+          - ''
+          - Set false ONLY to deliberately stage the cmdline change ahead of a kernel
+          - upgrade; the role then warns loudly instead of failing.
+        type: bool
+        required: false
+        default: true
+      gpu_passthrough_driver_modules:
+        description:
+          - Kernel modules whose PCI aliases are searched for the target device id.
+        type: list
+        required: false
+        default:
+          - xe
+          - i915
+          - amdgpu
+          - nouveau
+        elements: str
+      gpu_passthrough_packages:
+        description:
+          - Userspace tooling for inspecting the GPU. Deliberately MINIMAL.
+          - ''
+          - 'firmware-misc-nonfree must NOT be listed here on a Proxmox host: pve-firmware'
+          - declares Conflicts/Replaces against it, so apt would propose REMOVING
+          - 'pve-firmware — immediately before a planned reboot. It is also unnecessary:'
+          - pve-firmware already ships the Battlemage blobs
+          - (/lib/firmware/xe/bmg_guc_70.bin is owned by pve-firmware).
+          - ''
+          - "intel-media-va-driver-non-free is likewise omitted: bookworm's version has no"
+          - Battlemage support, and it needs the non-free component enabled, which is not
+          - guaranteed on a PVE host. Add it deliberately per-host if wanted.
+        type: list
+        required: false
+        default:
+          - vainfo
+          - pciutils
+        elements: str

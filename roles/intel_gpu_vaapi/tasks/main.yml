@@ -1,0 +1,226 @@
+---
+# Installs the VA-API userspace an Intel GPU needs, and PROVES it works by opening the device.
+#
+# On an Intel Arc (Battlemage) card the xe driver can bind the card and report its full VRAM
+# while `vainfo` still fails with `va_openDriver() returns -1` because bookworm's libva (2.17) has no xe
+# backend. That is a userspace gap, not a hardware or driver problem.
+
+- name: Setup vars
+  ansible.builtin.include_tasks: setup_vars.yml
+
+# --- 1. what is the situation before we touch anything -------------------------------------------
+- name: Read the current GPU and VA-API state
+  # Captured BEFORE any change so the "did this help?" question can be answered by comparison
+  # rather than by assumption. Every probe is read-only.
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      echo "KERNEL|$(uname -r)"
+      # The target GPU, its driver, and its OWN render node (found via the PCI device, not by
+      # listing /dev/dri — an iGPU's node would otherwise satisfy a global check).
+      addr=$(lspci -Dnn 2>/dev/null | grep -iE '\[03(00|02|80)\]:' \
+             | grep -i {{ vaapi_device_id | quote }} | awk '{print $1}' | head -1)
+      echo "ADDR|${addr:-none}"
+      if [ -n "$addr" ]; then
+        drv=$(lspci -vv -s "$addr" 2>/dev/null | awk -F': ' '/Kernel driver in use/{print $2}')
+        echo "DRIVER|${drv:-NONE}"
+        node=$(ls "{{ vaapi_sysfs_base }}/$addr/drm/" 2>/dev/null | grep '^renderD' | head -1)
+        echo "NODE|${node:-none}"
+      else
+        echo "DRIVER|NONE"
+        echo "NODE|none"
+      fi
+      echo "LIBVA|$(dpkg-query -W -f='${Version}' libva2 2>/dev/null || echo absent)"
+      echo "MEDIADRV|$(dpkg-query -W -f='${Version}' intel-media-va-driver-non-free 2>/dev/null \
+                       || dpkg-query -W -f='${Version}' intel-media-va-driver 2>/dev/null || echo absent)"
+      echo "VAINFO|$(command -v vainfo >/dev/null 2>&1 && echo present || echo absent)"
+      echo "BACKPORTS|$(grep -rl 'bookworm-backports' /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null | head -1 | sed 's|.*/||' || echo none)"
+  register: _va_before
+  changed_when: false
+
+- name: HARD GATE — the state read must have produced every marker
+  # An incomplete read would let this role report "nothing to do" for a host it never inspected,
+  # or claim success against an empty probe.
+  ansible.builtin.assert:
+    that:
+      - _va_before.rc == 0
+      - (_va_before.stdout_lines | select('match', '^ADDR') | list | length) == 1
+      - (_va_before.stdout_lines | select('match', '^DRIVER') | list | length) == 1
+      - (_va_before.stdout_lines | select('match', '^NODE') | list | length) == 1
+    fail_msg: >-
+      Could not read GPU state from {{ inventory_hostname }} (rc={{ _va_before.rc }}).
+      Got: {{ _va_before.stdout_lines | default([]) }}
+    quiet: true
+
+- name: Parse the current state
+  vars:
+    _g: "{{ _va_before.stdout_lines }}"
+  ansible.builtin.set_fact:
+    _va_addr: "{{ (_g | select('match', '^ADDR') | first).split('|')[1] }}"
+    _va_driver: "{{ (_g | select('match', '^DRIVER') | first).split('|')[1] }}"
+    _va_node: "{{ (_g | select('match', '^NODE') | first).split('|')[1] }}"
+    _va_libva: "{{ (_g | select('match', '^LIBVA') | first).split('|')[1] }}"
+    _va_mediadrv: "{{ (_g | select('match', '^MEDIADRV') | first).split('|')[1] }}"
+    _va_backports: "{{ (_g | select('match', '^BACKPORTS') | first).split('|')[1] }}"
+
+- name: HARD GATE — the GPU must be present and bound to a host driver
+  # This role installs USERSPACE. If the kernel has not claimed the card there is nothing for
+  # userspace to talk to, and installing packages would produce a confusing "still broken" result
+  # whose real cause is one layer down.
+  ansible.builtin.assert:
+    that:
+      - _va_addr != 'none'
+      - _va_driver not in ['NONE', 'vfio-pci']
+      - _va_node != 'none'
+    fail_msg: >-
+      GPU {{ vaapi_device_id }} is not usable by the host on {{ inventory_hostname }}:
+      address={{ _va_addr }}, driver={{ _va_driver }}, render node={{ _va_node }}.
+      {{ 'It is bound to vfio-pci — free it first (see roles/proxmox_gpu_passthrough).'
+         if _va_driver == 'vfio-pci' else
+         'No host driver has claimed it; check the kernel supports this device.' }}
+      Installing VA-API userspace cannot help until the kernel binds the card.
+    success_msg: >-
+      {{ vaapi_device_id }} at {{ _va_addr }} is bound to {{ _va_driver }} with node {{ _va_node }}.
+    quiet: true
+
+# --- 2. probe VA-API as it stands ----------------------------------------------------------------
+- name: Probe VA-API on the GPU's own render node (before)
+  # The measurement that matters. Run before AND after, so the report is a comparison rather than
+  # a claim.
+  ansible.builtin.include_tasks: probe_vainfo.yml
+  vars:
+    _probe_when: before
+
+- name: Report the starting state
+  ansible.builtin.debug:
+    msg:
+      - "host:         {{ inventory_hostname }}"
+      - "gpu:          {{ vaapi_device_id }} at {{ _va_addr }} ({{ _va_driver }}, {{ _va_node }})"
+      - "libva:        {{ _va_libva }}"
+      - "media driver: {{ _va_mediadrv }}"
+      - "backports:    {{ _va_backports }}"
+      - "vainfo works: {{ _va_probe_ok_before }}"
+      - "profiles:     {{ _va_profiles_before | default([]) | length }}"
+      - "apply:        {{ vaapi_apply | bool }}"
+
+- name: Report that nothing needs doing
+  ansible.builtin.debug:
+    msg: >-
+      VA-API already works on {{ _va_node }} with {{ _va_profiles_before | length }} profile(s) —
+      nothing to install.
+  when: _va_probe_ok_before | bool
+
+- name: Report that this is a dry run
+  ansible.builtin.debug:
+    msg: >-
+      DRY RUN — would enable {{ vaapi_backports_suite }} (pinned so ONLY the listed packages come
+      from it) and install: {{ vaapi_packages | join(', ') }}.
+      Re-run with vaapi_apply=true.
+  when:
+    - not (vaapi_apply | bool)
+    - not (_va_probe_ok_before | bool)
+
+# --- 3. apply --------------------------------------------------------------------------------------
+- name: Install the VA-API userspace
+  when:
+    - vaapi_apply | bool
+    - not (_va_probe_ok_before | bool)
+  block:
+    - name: Add the backports suite
+      # PVE 8 is bookworm-based and its libva predates the xe backend. bookworm-backports carries
+      # a libva with the xe backend.
+      ansible.builtin.apt_repository:
+        repo: "deb http://deb.debian.org/debian {{ vaapi_backports_suite }} main contrib non-free non-free-firmware"
+        filename: "{{ vaapi_backports_filename }}"
+        state: present
+        update_cache: false
+      register: _va_repo
+
+    - name: Pin backports so ONLY the requested packages come from it
+      # WITHOUT THIS PIN, adding backports to a hypervisor invites apt to pull newer versions of
+      # anything it happens to satisfy better — on a PVE host that is a large, unintended upgrade
+      # surface. Priority 100 means "available but never preferred", so nothing moves unless a
+      # package is asked for by name from this suite.
+      ansible.builtin.copy:
+        dest: "/etc/apt/preferences.d/{{ vaapi_backports_filename }}"
+        mode: "0644"
+        content: |
+          # Managed by the intel_gpu_vaapi role. Hand edits will be overwritten.
+          #
+          # Backports is enabled ONLY to obtain a VA-API stack new enough for Intel Xe/Battlemage.
+          # Priority 100 keeps every other package on its stable version: apt will not upgrade
+          # anything from here unless it is explicitly requested with the /{{ vaapi_backports_suite }}
+          # suffix. On a hypervisor an unpinned backports suite is a broad, silent upgrade path.
+          Package: *
+          Pin: release a={{ vaapi_backports_suite }}
+          Pin-Priority: 100
+      register: _va_pin
+
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+      when: (_va_repo is changed) or (_va_pin is changed)
+
+    - name: Install the VA-API packages from backports
+      # Explicitly suffixed with the suite, which is what actually pulls them from backports given
+      # the pin above. Named packages only — never a dist-upgrade.
+      ansible.builtin.apt:
+        name: "{{ vaapi_packages | map('regex_replace', '$', '/' ~ vaapi_backports_suite) | list }}"
+        state: present
+        install_recommends: false
+      register: _va_install
+
+    - name: Re-read the installed versions
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -o pipefail
+          echo "LIBVA|$(dpkg-query -W -f='${Version}' libva2 2>/dev/null || echo absent)"
+          echo "MEDIADRV|$(dpkg-query -W -f='${Version}' intel-media-va-driver-non-free 2>/dev/null \
+                           || dpkg-query -W -f='${Version}' intel-media-va-driver 2>/dev/null || echo absent)"
+      register: _va_after_pkgs
+      changed_when: false
+
+    - name: Probe VA-API again (after)
+      ansible.builtin.include_tasks: probe_vainfo.yml
+      vars:
+        _probe_when: after
+
+    - name: Report the outcome
+      ansible.builtin.debug:
+        msg:
+          - "libva:        {{ _va_libva }} -> {{ (_va_after_pkgs.stdout_lines | select('match', '^LIBVA') | first).split('|')[1] }}"
+          - "media driver: {{ _va_mediadrv }} -> {{ (_va_after_pkgs.stdout_lines | select('match', '^MEDIADRV') | first).split('|')[1] }}"
+          - "vainfo works: {{ _va_probe_ok_before }} -> {{ _va_probe_ok_after }}"
+          - "profiles:     {{ _va_profiles_before | default([]) | length }} -> {{ _va_profiles_after | default([]) | length }}"
+
+    - name: HARD GATE — VA-API must actually work now
+      # The point of the role. "Packages installed" is NOT the deliverable; an openable device with
+      # usable profiles is. Without this gate the role could report success while vainfo still
+      # fails, which is exactly the state it exists to fix.
+      ansible.builtin.assert:
+        that:
+          - _va_probe_ok_after | bool
+          - (_va_profiles_after | default([])) | length > 0
+        fail_msg: >-
+          VA-API still does not work on {{ _va_node }} after installing
+          {{ vaapi_packages | join(', ') }}.
+          vainfo output: {{ _va_probe_raw_after | default('(none)') | trim }}
+          The packages are installed but the device cannot be opened — do NOT wire this GPU into a
+          guest yet. ROLLBACK: apt-get install --allow-downgrades <pkg>/{{ vaapi_stable_suite }},
+          then remove /etc/apt/sources.list.d/{{ vaapi_backports_filename }}.list and
+          /etc/apt/preferences.d/{{ vaapi_backports_filename }}.
+        success_msg: >-
+          VA-API works on {{ _va_node }}: {{ _va_profiles_after | length }} profile(s).
+        quiet: true
+
+    - name: Report the codecs that matter for transcoding
+      # The codecs that usually decide whether a discrete Arc is worth it: HEVC 10-bit and AV1
+      # are what older integrated GPUs cannot do.
+      ansible.builtin.debug:
+        msg:
+          - "HEVC Main10 (10-bit): {{ 'YES' if (_va_profiles_after | select('search', 'HEVCMain10') | list | length > 0) else 'no' }}"
+          - "AV1:                  {{ 'YES' if (_va_profiles_after | select('search', 'AV1') | list | length > 0) else 'no' }}"
+          - "H.264:                {{ 'YES' if (_va_profiles_after | select('search', 'H264') | list | length > 0) else 'no' }}"
+          - "all profiles:         {{ _va_profiles_after | join(', ') }}"

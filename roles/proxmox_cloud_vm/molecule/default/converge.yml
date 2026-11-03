@@ -1,0 +1,67 @@
+---
+# Gates and plan, rendered by the role's OWN files (_resolve_defaults, _gates, _plan). The role's
+# real converge needs a Proxmox node (qm, pvesh), so coverage is honestly PARTIAL: it proves each
+# gate passes a good input and refuses each bad one (naming itself), and that the create command
+# and desired-settings the role would use say what they must. The on-node read-backs in
+# tasks/main.yml prove the VM; the play-driven live test lives with the play that calls this role.
+- name: Converge — gates and plan
+  hosts: localhost
+  gather_facts: false
+  vars:
+    render_root: /tmp/molecule-proxmox-cloud-vm
+    _good:
+      proxmox_cloud_vm_node: pve1
+      proxmox_cloud_vm_vmid: 900
+      proxmox_cloud_vm_name: worker
+      proxmox_cloud_vm_cores: 4
+      proxmox_cloud_vm_memory_mb: 6144
+      proxmox_cloud_vm_balloon_mb: 4096
+      proxmox_cloud_vm_disk_gb: 48
+      proxmox_cloud_vm_vlan_tag: 40
+      proxmox_cloud_vm_startup_order: 215
+      proxmox_cloud_vm_tags: [zeta, ansible]
+      proxmox_cloud_vm_description: "a worker"
+      proxmox_cloud_vm_image_dir: /var/lib/vz/template/iso
+      proxmox_cloud_vm_ssh_public_key: "ssh-ed25519 AAAAC3Nza test@example"
+      proxmox_cloud_vm_image:
+        url: "https://cloud-images.ubuntu.com/releases/noble/release-20261017/ubuntu-24.04-server-cloudimg-amd64.img"
+        sha256: "04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94"
+  tasks:
+    - name: Ensure a clean render root
+      ansible.builtin.file: {path: "{{ render_root }}", state: absent}
+
+    - name: Create it
+      ansible.builtin.file: {path: "{{ render_root }}", state: directory, mode: "0755"}
+
+    - name: Write the good input and the no-startup variant as vars files
+      ansible.builtin.copy:
+        dest: "{{ render_root }}/{{ item.name }}.json"
+        content: "{{ _good | combine(item.over) | to_json }}"
+        mode: "0644"
+      loop:
+        - {name: good, over: {}}
+        - {name: nostartup, over: {proxmox_cloud_vm_startup_order: 0, proxmox_cloud_vm_balloon_mb: 0}}
+      loop_control:
+        label: "{{ item.name }}"
+
+    # BAD CASES FIRST. The role's resolver set_facts every option it binds, and a set_fact outranks
+    # the include_vars each case loads, so any case run AFTER a plan would see the plan's values
+    # (found here: balloon-above-ceiling and image-dir-shell were "let through" for that reason, and
+    # molecule said so).
+    - name: Each bad input must be refused by its own gate
+      ansible.builtin.include_tasks: _bad_case.yml
+      loop:
+        - {id: balloon-above-ceiling, expect: balloon floor, over: {proxmox_cloud_vm_balloon_mb: 8192}}
+        - {id: image-moving-alias, expect: not under current/latest/daily, over: {proxmox_cloud_vm_image: {url: "https://cloud-images.ubuntu.com/releases/noble/current/x.img", sha256: "04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94"}}}
+        - {id: image-short-sum, expect: 64-hex sha256, over: {proxmox_cloud_vm_image: {url: "https://x/y/z.img", sha256: "abc"}}}
+        - {id: image-http, expect: 64-hex sha256, over: {proxmox_cloud_vm_image: {url: "http://x/y/z.img", sha256: "04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94"}}}
+        - {id: private-key, expect: not a public key line, over: {proxmox_cloud_vm_ssh_public_key: "-----BEGIN OPENSSH PRIVATE KEY-----"}}
+        - {id: image-dir-shell, expect: absolute path, over: {proxmox_cloud_vm_image_dir: "/tmp;rm -rf /"}}
+      loop_control:
+        label: "{{ item.id }}"
+
+    - name: Plan each variant with the role's own files
+      ansible.builtin.include_tasks: _plan_case.yml
+      loop: [good, nostartup]
+      loop_control:
+        loop_var: _case

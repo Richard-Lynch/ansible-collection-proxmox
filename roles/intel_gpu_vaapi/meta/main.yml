@@ -1,0 +1,14 @@
+---
+galaxy_info:
+  namespace: richard_lynch
+  author: Richard Lynch
+  description: >-
+    Install the Intel VA-API userspace for one GPU from a pinned backports suite, behind an apply
+    flag, and prove it works by running vainfo on that GPU's own render node before and after.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  platforms:
+    - name: Debian
+      versions: [bookworm]
+  galaxy_tags: [intel, gpu, vaapi, transcoding, proxmox]
+dependencies: []

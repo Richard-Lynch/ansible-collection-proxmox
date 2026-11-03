@@ -1,0 +1,87 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/proxmox_ci_access/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate proxmox_ci_access
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Create a least-privilege PVE user, role and API token for CI
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      proxmox:
+        description: Common arguments required to interact with Proxmox
+        type: dict
+        required: true
+        options:
+          cluster:
+            type: str
+            required: true
+          node:
+            type: str
+            required: true
+          user:
+            type: str
+            required: true
+          password:
+            type: str
+            required: true
+          api_host:
+            type: str
+            required: true
+          api_token_id:
+            type: str
+            required: true
+          api_token_secret:
+            type: str
+            required: true
+          is_primary:
+            type: bool
+            required: true
+      proxmox_ci_access_user:
+        description:
+          - The CI PVE user to create, e.g. `ci-staging@pve`.
+        type: str
+        required: true
+      proxmox_ci_access_role:
+        description:
+          - The least-privilege role name, e.g. `CIStaging`.
+        type: str
+        required: true
+      proxmox_ci_access_token:
+        description:
+          - Token name; the token id is `<user>!<token>`.
+        type: str
+        required: true
+      proxmox_ci_access_privs:
+        description:
+          - Privileges granted to the role (guest ops + read; no host modify).
+        type: list
+        required: false
+        elements: str
+      proxmox_ci_access_acl_path:
+        description:
+          - ACL path the role is granted on.
+        type: str
+        required: false
+        default: /
+      proxmox_ci_access_token_privsep:
+        description:
+          - 1 = token has its own privileges (ACL the token too).
+        type: int
+        required: false
+        default: 1
+        choices:
+          - 0
+          - 1
+      proxmox_ci_access_secret_name:
+        description:
+          - Where the caller stores the new token secret (a secret-manager item name).
+          - Only named in the one-time message printed when the token is created.
+        type: str
+        required: false
+        default: ''

@@ -1,0 +1,35 @@
+# Parse/check tier. The role writes the Proxmox firewall on a live cluster, so a scenario cannot and
+# must not reach one: a test that switched on a real datacenter firewall would be far worse than no
+# test.
+#
+# What it CAN test, and what actually carries the risk, is the GATE LOGIC that decides whether it is
+# safe to act at all, plus the text rendered for the cluster and the pmxcfs writer. The scenario
+# calls the REAL role with render_only (nothing read, nothing written) against a good declaration
+# and against deliberately bad ones, and asserts each gate fires with its own message — rather than
+# re-deriving the role's filter expressions over a hand-typed stub, which would assert the copy
+# against itself and stay green through a real regression.
+---
+dependency:
+  name: galaxy
+driver:
+  name: default
+platforms:
+  - name: localhost
+provisioner:
+  name: ansible
+  # The scenario CALLS the role, so the roles directory must be on the search path.
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../"
+    # Dependencies (galaxy.yml) are installed into collections.galaxy/ at the repo root; the
+    # second entry resolves this collection itself when the checkout sits at
+    # ansible_collections/richard_lynch/proxmox. molecule does not read a repo ansible.cfg.
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../collections.galaxy:${MOLECULE_PROJECT_DIRECTORY}/../../../../.."
+  inventory:
+    host_vars:
+      localhost:
+        ansible_connection: local
+  playbooks:
+    converge: converge.yml
+    verify: verify.yml
+verifier:
+  name: ansible

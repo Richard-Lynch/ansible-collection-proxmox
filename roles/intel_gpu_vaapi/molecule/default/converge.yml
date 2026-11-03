@@ -1,0 +1,176 @@
+---
+# Runs the REAL role twice: the normal dry run, and a refusal path where the GPU is still on
+# vfio-pci. The apply path is deliberately NOT exercised — it needs a real apt.
+
+- name: Converge — the real role against a host whose Arc is bound to xe
+  hosts: localhost
+  gather_facts: true
+  environment:
+    PATH: "/tmp/molecule-vaapi/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  vars:
+    fake_root: /tmp/molecule-vaapi
+  tasks:
+    - name: Reset the scratch tree
+      ansible.builtin.file: { path: "{{ fake_root }}", state: absent }
+
+    - name: Create the scratch dirs
+      ansible.builtin.file:
+        path: "{{ fake_root }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: [bin, bin-vfio, "sys/bus/pci/devices/0000:01:00.0/drm", "sys/bus/pci/devices/0000:00:02.0/drm"]
+
+    - name: Stage the fake render nodes
+      # renderD129 on the Arc, renderD128 on the iGPU — the usual split with two GPUs. This is
+      # what lets the scenario prove the role probes the CORRECT node: a role that tested
+      # renderD128 would see the working iGPU and report the broken Arc as fine.
+      ansible.builtin.file:
+        path: "{{ fake_root }}/sys/bus/pci/devices/{{ item.addr }}/drm/{{ item.node }}"
+        state: touch
+        mode: "0660"
+      loop:
+        - { addr: "0000:01:00.0", node: "renderD129" }
+        - { addr: "0000:00:02.0", node: "renderD128" }
+
+    - name: Install the fake tools
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/files/{{ item }}"
+        dest: "{{ fake_root }}/bin/{{ item }}"
+        mode: "0755"
+      loop: [lspci, vainfo, dpkg-query]
+
+    - name: Confirm the fakes shadow the real tools
+      # `ansible.builtin.shell`, NOT `command`, because `command -v` is a SHELL BUILTIN. The command
+      # module execs the binary directly, so it looks for an executable literally named `command`.
+      #
+      # macOS ships /usr/bin/command as a real executable and Ubuntu does not, so the command
+      # module form works on a Mac and fails on Linux with
+      # "[Errno 2] No such file or directory: b'command'" — a platform difference, not a flake.
+      #
+      # `command -v` is still the right test (it resolves through PATH exactly as the shell would,
+      # which is the thing being asserted); it just needs a shell to run in.
+      ansible.builtin.shell:
+        cmd: command -v lspci
+      register: _which
+      changed_when: false
+
+    - name: Assert the shadowing took effect
+      ansible.builtin.assert:
+        that:
+          - _which.stdout | trim == fake_root ~ '/bin/lspci'
+        fail_msg: "PATH override did not take effect — got '{{ _which.stdout | trim }}'."
+        quiet: true
+
+    # --- run 1: the normal dry run --------------------------------------------------------------
+    - name: Run the role in dry-run mode
+      ansible.builtin.include_role:
+        name: intel_gpu_vaapi
+      vars:
+        vaapi_device_id: "8086:e20c"
+        vaapi_apply: false
+        vaapi_sysfs_base: "{{ fake_root }}/sys/bus/pci/devices"
+
+    - name: Capture the dry-run state
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/captured.json"
+        mode: "0644"
+        content: |
+          {{ {
+               'addr': _va_addr,
+               'driver': _va_driver,
+               'node': _va_node,
+               'libva': _va_libva,
+               'mediadrv': _va_mediadrv,
+               'probe_ok': (_va_probe_ok_before | string),
+               'profiles': (_va_profiles_before | default([])),
+               'raw': (_va_probe_raw_before | default('')),
+             } | to_nice_json }}
+
+# --- run 2: the vfio refusal path ----------------------------------------------------------------
+# Separate subprocess because the role is EXPECTED to fail.
+- name: Converge — the vfio-pci refusal path
+  hosts: localhost
+  gather_facts: false
+  vars:
+    fake_root: /tmp/molecule-vaapi
+  tasks:
+    - name: Install an lspci that reports the Arc still bound to vfio-pci
+      # The card is still on vfio-pci. Installing VA-API userspace cannot help while the kernel has not claimed
+      # the card, and doing so would produce a confusing "still broken" result whose real cause is
+      # a layer down.
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/bin-vfio/lspci"
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          if [[ "$*" == *"-vv"*"0000:01:00.0"* ]]; then
+            echo '0000:01:00.0 VGA compatible controller: Intel Corporation Battlemage G21'
+            echo '	Kernel driver in use: vfio-pci'
+          elif [[ "$*" == *"-Dnn"* ]]; then
+            echo '0000:01:00.0 VGA compatible controller [0300]: Intel Corporation Battlemage G21 [Intel Graphics] [8086:e20c]'
+          fi
+          exit 0
+
+    - name: Write the refusal play
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/refuse.yml"
+        mode: "0644"
+        content: |
+          - hosts: localhost
+            gather_facts: true
+            environment:
+              PATH: "{{ fake_root }}/bin-vfio:{{ fake_root }}/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            tasks:
+              - include_role:
+                  name: intel_gpu_vaapi
+                vars:
+                  vaapi_device_id: "8086:e20c"
+                  vaapi_apply: true
+                  vaapi_sysfs_base: "{{ fake_root }}/sys/bus/pci/devices"
+
+    - name: Run it, expecting refusal
+      # `ansible-playbook` BY NAME, resolved through PATH — not built from VIRTUAL_ENV.
+      #
+      # A path built from VIRTUAL_ENV breaks wherever ansible is pip-installed without a venv: it
+      # points at a binary that does not exist, the task runs nothing, and the downstream
+      # assertion then blames the ROLE for a missing binary.
+      #
+      # Whichever ansible is running THIS playbook is on PATH by definition, so resolving by name
+      # is correct in both environments.
+      ansible.builtin.command:
+        cmd: ansible-playbook -i localhost, -c local {{ fake_root }}/refuse.yml
+      environment:
+        ANSIBLE_ROLES_PATH: "{{ (playbook_dir ~ '/../../..') | realpath }}"
+        ANSIBLE_STDOUT_CALLBACK: default
+        ANSIBLE_LOAD_CALLBACK_PLUGINS: "0"
+      register: _refuse
+      changed_when: false
+      # Still not failed_when:false — the role is EXPECTED to exit non-zero here. But rc 2 (the
+      # role refused) and rc 127 / "No such file" (nothing ran) are different things, and the
+      # assertion below only distinguishes them because the guard task that follows checks output
+      # is non-empty.
+      failed_when: false
+
+    - name: HARD GATE — the nested playbook must actually have run
+      # Without this, "nothing executed" is indistinguishable from "the role declined to refuse",
+      # and the failure message points at the role instead of the harness.
+      ansible.builtin.assert:
+        that:
+          - (_refuse.stdout | default('') ~ _refuse.stderr | default('')) | length > 0
+          - _refuse.rc != 127
+        fail_msg: >-
+          The nested ansible-playbook produced NO output (rc={{ _refuse.rc }}). It did not run —
+          this is a harness problem (binary not found / bad path), not a role failure. Do not read
+          the assertions below as evidence about the role.
+        success_msg: "Nested playbook executed (rc={{ _refuse.rc }}, {{ (_refuse.stdout | default('')) | length }} bytes of stdout)."
+        quiet: true
+
+    - name: Record the refusal result
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/refuse.json"
+        mode: "0644"
+        content: |
+          {{ {
+               'rc': _refuse.rc,
+               'output': ((_refuse.stdout | default('')) ~ (_refuse.stderr | default(''))),
+             } | to_nice_json }}

@@ -1,0 +1,14 @@
+---
+# proxmox_ci_ssh_access — create a narrow CI OS user on a PVE node so the CI runner can run the few
+# host commands staging needs (pct/qm/pvesh) via passwordless sudo, WITHOUT root SSH. Least privilege.
+
+# proxmox_ci_ssh_user (REQUIRED, no default): the OS user the runner logs in as.
+proxmox_ci_ssh_pubkey: "" # the runner's public key (required)
+proxmox_ci_ssh_sudoers_file: /etc/sudoers.d/proxmox-ci
+
+# The ONLY commands the CI user may run as root. Deliberately narrow — no shell, no package mgmt,
+# no cluster/network reconfig. pct/qm/pvesh cover guest lifecycle + read-only cluster queries.
+proxmox_ci_ssh_sudo_commands:
+  - /usr/sbin/pct
+  - /usr/sbin/qm
+  - /usr/bin/pvesh

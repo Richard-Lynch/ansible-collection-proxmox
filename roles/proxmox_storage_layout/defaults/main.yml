@@ -1,0 +1,38 @@
+---
+# proxmox_storage_layout — reconcile a node's storage so BACKUPS live off the tiny `root` LV.
+#
+# Why: the PVE installer default puts `local` (dir storage for ISOs/templates/backups) on the small
+# `root` LV, while `data` (the LVM-thin pool) holds all the space but is BLOCK storage (can't hold
+# files). On a single-disk node this fills root to 100% while most of the pool sits idle, and the
+# thin pool can't be shrunk (lvm 2.03: "cannot be reduced in size yet") to grow root. Canonical fix: carve a
+# thin LV out of the pool, format it, mount it, and register it as a PVE Directory storage for backups.
+# This is the documented, ONLINE (no reboot) approach.
+#
+# Idempotent: each step is a no-op if already present. Safe to re-run; never touches guest disks.
+
+proxmox_storage_layout_vg: "pve"
+proxmox_storage_layout_thinpool: "data"
+
+# Dedicated backup volume carved from the thin pool.
+proxmox_storage_layout_backup_lv: "vzbackup"
+# proxmox_storage_layout_backup_size (REQUIRED, no default): the backup LV's virtual size, sized to
+# the node's thin pool (thin-provisioned; grows as used, capped there).
+proxmox_storage_layout_backup_fstype: "ext4"
+proxmox_storage_layout_backup_mount: "/var/lib/vz-backups"
+
+# PVE Directory storage registered on the mount.
+proxmox_storage_layout_pve_storage_id: "local-backups"
+proxmox_storage_layout_pve_content: "backup,iso,vztmpl"
+# The nodes the storage is advertised on, as PVE's comma-separated `nodes` list.
+# Restricting the storage to the node that ran the role means whichever node ran it LAST owns the
+# storage exclusively. A cluster-wide vzdump job (`all: true`) then fails on every guest on any
+# other node with "could not activate storage", every night, without anything else reporting it.
+# So the list is the FULL set of nodes that have the backup LV mounted, which makes the storage
+# valid cluster-wide. Each node still writes to its OWN local mount — `dir` storage with several
+# nodes means "this path exists on all of these", not "shared filesystem".
+proxmox_storage_layout_pve_nodes: "{{ proxmox_storage_layout_backup_nodes | join(',') }}"
+
+# proxmox_storage_layout_backup_nodes (REQUIRED, no default): the nodes that have (or will have)
+# the backup LV. Which nodes a cluster has is inventory, so the caller declares it.
+# Prune policy applied at the storage level (bounds the backup dir).
+proxmox_storage_layout_prune: "keep-daily=3,keep-weekly=2,keep-monthly=1"

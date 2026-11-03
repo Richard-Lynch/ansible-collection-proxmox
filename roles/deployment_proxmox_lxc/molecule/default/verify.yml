@@ -1,0 +1,138 @@
+# Assert the transform kept every interface distinct.
+#
+# PROVEN CAPABLE OF FAILING: run this scenario against a transform that maps `combine` over the
+# whole dict with the loop item (see tasks/set_vars.yml) and the first two assertions both fail
+# (all three entries render as net2's `name=eth2,...,tag=30`). A test that has never been seen to
+# fail is not evidence of anything.
+---
+- name: Verify
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _raw: "{{ lookup('file', lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') ~ '/netif.json') }}"
+    _rendered: "{{ _raw | from_json }}"
+
+  tasks:
+    - name: Show what the transform produced
+      ansible.builtin.debug:
+        msg: "{{ item.key }} -> {{ item.value }}"
+      loop: "{{ _rendered | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: Every interface must keep its OWN settings
+      ansible.builtin.assert:
+        that:
+          # THE REGRESSION GUARD. Three inputs must yield three DISTINCT strings; the bug made
+          # them identical. This one assertion is the whole reason the scenario exists.
+          - "(_rendered | dict2items | map(attribute='value') | unique | list | length) == 3"
+          # And each key must hold ITS OWN values, not merely be distinct from the others — a
+          # transform that shuffled the values between keys would satisfy the count above.
+          - "'name=eth0' in _rendered.net0 and 'tag=10' in _rendered.net0 and '192.0.2.10/24' in _rendered.net0"
+          - "'name=eth1' in _rendered.net1 and 'tag=20' in _rendered.net1 and '198.51.100.10/24' in _rendered.net1"
+          - "'name=eth2' in _rendered.net2 and 'tag=30' in _rendered.net2 and '203.0.113.10/24' in _rendered.net2"
+          # PVE's wire format: comma-separated k=v pairs, and no leftover Python/Jinja repr.
+          # `key=value` as LITERAL TEXT is the specific wrong turn taken while fixing this
+          # (dict2items yields mappings, not tuples), so it is named rather than left implicit.
+          - "_rendered.net0 is search('^([a-z0-9_]+=[^,]+)(,[a-z0-9_]+=[^,]+)*$')"
+          - "'key=value' not in _raw"
+          - "'{' not in _rendered.net0"
+        fail_msg: >-
+          netif transform is wrong: {{ _rendered }}.
+          If all three are identical, the per-interface values have collapsed onto one entry —
+          see the comment in tasks/set_vars.yml.
+        success_msg: >-
+          All 3 interfaces rendered distinctly and correctly in PVE k=v form.
+        quiet: true
+
+- name: Verify the drift comparison
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _d: "{{ lookup('file', lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') ~ '/drift.json') | from_json }}"
+
+  tasks:
+    - name: Show each case
+      ansible.builtin.debug:
+        msg: "{{ item.key }}: {{ item.value }}"
+      loop: "{{ _d | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: Only a REAL difference is drift, and only a runtime one restarts the guest
+      ansible.builtin.assert:
+        that:
+          # THE CORE GUARD: a live config against its own declaration is NOT drift. The module's
+          # comparison says it is, on every run, which would restart the guest each time.
+          - "_d.in_sync.drift == []"
+          - "_d.tags_reordered.drift == []"
+          - "_d.firewall_bool.drift == []"
+          # PVE omits `onboot` when it is off, so absent IS the declared `false`.
+          - "_d.onboot_off_absent.drift == []"
+          # Real changes are still seen — a comparison that never reports drift is the opposite
+          # silent guard.
+          - "_d.tag_added.drift == ['tags'] and not _d.tag_added.restart"
+          - "_d.description_changed.drift == ['description'] and not _d.description_changed.restart"
+          - "_d.memory_changed.drift == ['memory'] and _d.memory_changed.restart"
+          - "_d.vlan_changed.drift == ['net0'] and _d.vlan_changed.restart"
+          - "_d.disk_grown.drift == ['rootfs']"
+        fail_msg: "{{ _d | to_json }}"
+        quiet: true
+
+- name: Verify an update never changes a guest's MAC
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _m: "{{ lookup('file', lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') ~ '/mac.json') | from_json }}"
+    _mac: BC:24:11:00:00:0A
+
+  tasks:
+    - name: Show each case
+      ansible.builtin.debug:
+        msg: "{{ item.key }}: {{ item.value }}"
+      loop: "{{ _m | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: A netif is sent only when an interface drifted, and always with the live hwaddr
+      ansible.builtin.assert:
+        that:
+          # The declared netif WITH the live hwaddr carried in is not drift.
+          - "_m.in_sync.drift == []"
+          # THE MAC CASE: a description-only drift must not touch net0 at all.
+          - "_m.description_only.drift == ['description']"
+          - "_m.description_only.netif == {}"
+          # A real VLAN change is drift, and the net0 it writes keeps the MAC.
+          - "_m.vlan_changed.drift == ['net0']"
+          - "('hwaddr=' ~ _mac) in _m.vlan_changed.netif.net0"
+          - "'tag=50' in _m.vlan_changed.netif.net0"
+        fail_msg: "{{ _m | to_json }}"
+        quiet: true
+
+    - name: The update task sends THIS netif, not the anchor's (which has no hwaddr)
+      # create.yml calls the API, so molecule cannot run it; this reads the task as Ansible will
+      # (the YAML merge key resolved) and asserts the override is still there. Without it the
+      # update inherits the create anchor's netif and every netN is re-PUT with no hwaddr.
+      ansible.builtin.assert:
+        that:
+          - "_update | length == 1"
+          - "'deployment_proxmox_lxc__update_netif' in (_update | first)['community.general.proxmox'].netif"
+          - "'omit' in (_update | first)['community.general.proxmox'].netif"
+        fail_msg: "create.yml's update task no longer takes its netif from drift.yml: {{ _update }}"
+        quiet: true
+      vars:
+        _update: >-
+          {{ lookup('file', lookup('env', 'MOLECULE_PROJECT_DIRECTORY') ~ '/tasks/create.yml')
+             | from_yaml | selectattr('name', 'equalto', 'Update container configuration') | list }}
+
+    - name: Run the filter's unit tests (CI runs them here, as the role's molecule scenario)
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}/../../tests/unit/test_lxc_config_drift.py"
+      register: _unit
+      changed_when: false
+
+    - name: Show the unit test result
+      ansible.builtin.debug:
+        msg: "{{ _unit.stderr_lines }}"

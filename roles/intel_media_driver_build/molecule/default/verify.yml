@@ -1,0 +1,87 @@
+---
+# Asserts on what the REAL role detected and decided — not on a re-derivation of its logic.
+
+- name: Verify intel_media_driver_build
+  hosts: localhost
+  gather_facts: false
+  vars:
+    fake_root: /tmp/molecule-ihd
+  tasks:
+    - name: Read the captured state
+      ansible.builtin.slurp: { src: "{{ fake_root }}/{{ item }}" }
+      loop: [captured.json, refuse.json]
+      register: _raw
+
+    - name: Decode
+      ansible.builtin.set_fact:
+        c: "{{ _raw.results[0].content | b64decode | from_json }}"
+        refuse: "{{ _raw.results[1].content | b64decode | from_json }}"
+
+    # --- device resolution ------------------------------------------------------------------------
+    - name: The role resolved the ARC and its OWN render node
+      # THE key discrimination. Both GPUs are class 0300; the fixture has renderD128 (working iGPU) and
+      # renderD129 (the Arc). A role that took "the first display device" or "the first renderD*"
+      # would test the iGPU, find it healthy, and report a broken Arc as fine.
+      ansible.builtin.assert:
+        that:
+          - c.addr == '0000:01:00.0'
+          - c.driver == 'xe'
+          - c.node == 'renderD129'
+        fail_msg: "Wrong device/node resolved: {{ c.addr }} / {{ c.driver }} / {{ c.node }}"
+        quiet: true
+
+    # --- the before-probe -------------------------------------------------------------------------
+    - name: The bundled driver was correctly detected as BROKEN
+      # The failure mode: libva finds the init function, then SIGBUSes. A probe that only checked
+      # "did vainfo print anything" would score this as success, since it prints three lines first.
+      ansible.builtin.assert:
+        that:
+          - (c.ok_before | lower) == 'false'
+          - (c.profiles_before | length) == 0
+          - "'Bus error' in c.raw_before"
+        fail_msg: >-
+          Probe wrongly reported the bundled driver as working:
+          ok={{ c.ok_before }}, profiles={{ c.profiles_before }}
+        quiet: true
+
+    - name: The patched driver was correctly detected as NOT yet installed
+      ansible.builtin.assert:
+        that:
+          - (c.has_patched | lower) == 'false'
+        fail_msg: "Wrongly reported a patched driver as already present."
+        quiet: true
+
+    - name: The guest was detected as running
+      ansible.builtin.assert:
+        that:
+          - c.ct == 'running'
+        fail_msg: "Guest state wrong: {{ c.ct }}"
+        quiet: true
+
+    # --- generate-don't-apply ---------------------------------------------------------------------
+    - name: The DRY RUN built and installed nothing
+      # No docker fixture exists, so any attempt to build would have errored. Completing cleanly is
+      # the evidence that the apply branch was not taken.
+      ansible.builtin.assert:
+        that:
+          - c.addr | length > 0
+          - (c.has_patched | lower) == 'false'
+        fail_msg: "Dry run did not complete cleanly, or installed something."
+        quiet: true
+
+    # --- the refusal path -------------------------------------------------------------------------
+    - name: The role REFUSES when the GPU is still bound to vfio-pci
+      # Building userspace cannot help while the kernel has not claimed the card. Refusing with a
+      # specific message points at the real fix instead of leaving someone to conclude the build
+      # was faulty.
+      #
+      # Asserts on the MESSAGE, not just rc: a missing role or syntax error also exits non-zero.
+      ansible.builtin.assert:
+        that:
+          - refuse.rc != 0
+          - "'was not found' not in refuse.output"
+          - "'bound to vfio-pci' in refuse.output"
+        fail_msg: >-
+          Role did not refuse for the expected reason (rc={{ refuse.rc }}).
+          output tail: {{ refuse.output[-400:] | default('(empty)') }}
+        quiet: true

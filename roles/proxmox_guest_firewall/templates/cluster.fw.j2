@@ -1,0 +1,13 @@
+# Rendered by roles/proxmox_guest_firewall. Do not edit by hand: the next apply overwrites it.
+[OPTIONS]
+{% for k in proxmox_guest_firewall_cluster_options | dict2items | map(attribute='key') | sort %}
+{{ k }}: {{ proxmox_guest_firewall_cluster_options[k] }}
+{% endfor %}
+{% for name in proxmox_guest_firewall_ipsets | dict2items | map(attribute='key') | sort %}
+
+[IPSET {{ name }}]
+{% for e in proxmox_guest_firewall_ipsets[name] %}
+{{ e.cidr }}{% if e.comment | default('') | length > 0 %} # {{ e.comment }}{% endif %}
+
+{% endfor %}
+{% endfor %}

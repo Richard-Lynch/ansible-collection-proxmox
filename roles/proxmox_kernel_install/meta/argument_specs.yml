@@ -1,0 +1,51 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/proxmox_kernel_install/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate proxmox_kernel_install
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Install an additional Proxmox kernel series alongside the running one
+    description:
+      - Adds a kernel package (e.g. proxmox-kernel-6.14) to a PVE host so it can be booted
+      - next time. Used to reach hardware support the running kernel lacks — for example,
+      - Intel Arc (Battlemage) cards need ~6.12+ for xe to recognise them.
+      - ''
+      - "Generate-don't-apply: the default run reports what it would install and changes"
+      - 'nothing. The role NEVER removes a kernel and NEVER reboots: the running kernel'
+      - stays installed and selectable in the boot menu, which is the rollback.
+      - ''
+      - 'It installs exactly the one named package with state: present (never `latest`,'
+      - never autoremove), so it cannot turn into an incidental full-system upgrade of a
+      - hypervisor or drop an existing kernel as a side effect.
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      kernel_install_package:
+        description:
+          - Kernel package to install, e.g. 'proxmox-kernel-6.14'. Required and never
+          - defaulted — which kernel a hypervisor runs is not a thing to guess at.
+          - The role fails if apt has no candidate for it.
+        type: str
+        required: true
+      kernel_install_apply:
+        description:
+          - false (default) reports the planned install and changes nothing.
+          - true installs the package. A reboot is still required afterwards and is
+          - never performed here.
+        type: bool
+        required: false
+        default: false
+      kernel_install_min_free_mb:
+        description:
+          - Minimum free megabytes required on /boot before installing. A full /boot
+          - during initramfs generation can leave a half-written initramfs for a kernel
+          - the bootloader already references — a routine reboot then becomes a
+          - recovery session.
+        type: int
+        required: false
+        default: 1024

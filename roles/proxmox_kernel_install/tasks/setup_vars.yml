@@ -1,0 +1,23 @@
+---
+# Resolve caller-supplied vars over the generated defaults. defaults/main.yml is GENERATED from
+# meta/argument_specs.py and holds `*__default` vars, not the plain names the tasks use.
+
+- name: Assert the kernel package was supplied
+  ansible.builtin.assert:
+    that:
+      - kernel_install_package is defined
+      - (kernel_install_package | default('') | trim) | length > 0
+      - kernel_install_package is match('^proxmox-kernel-[0-9]+\.[0-9]+$')
+    fail_msg: >-
+      proxmox_kernel_install requires kernel_install_package as a series package name, e.g.
+      'proxmox-kernel-6.14'. Got: '{{ kernel_install_package | default('(undefined)') }}'.
+      A specific build (proxmox-kernel-6.14.8-2-pve) is deliberately not accepted — pinning an
+      exact build here means the host stops receiving security updates for its own kernel.
+    success_msg: "Target kernel: {{ kernel_install_package }}"
+    quiet: true
+
+- name: Resolve defaults
+  ansible.builtin.set_fact:
+    kernel_install_apply: "{{ kernel_install_apply | default(kernel_install_apply__default) }}"
+    kernel_install_min_free_mb: >-
+      {{ kernel_install_min_free_mb | default(kernel_install_min_free_mb__default) }}

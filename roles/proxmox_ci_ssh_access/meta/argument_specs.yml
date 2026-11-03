@@ -1,0 +1,37 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/proxmox_ci_ssh_access/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate proxmox_ci_ssh_access
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Narrow CI SSH user + restricted sudoers on a PVE node
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      proxmox_ci_ssh_user:
+        description:
+          - The OS user the CI runner logs in as, e.g. `cistaging`.
+        type: str
+        required: true
+      proxmox_ci_ssh_pubkey:
+        description:
+          - The runner's SSH public key to authorize.
+        type: str
+        required: true
+      proxmox_ci_ssh_sudoers_file:
+        description:
+          - The sudoers drop-in that grants the CI user its commands.
+        type: str
+        required: false
+        default: /etc/sudoers.d/proxmox-ci
+      proxmox_ci_ssh_sudo_commands:
+        description:
+          - The ONLY commands the CI user may run as root (pct/qm/pvesh).
+        type: list
+        required: false
+        elements: str

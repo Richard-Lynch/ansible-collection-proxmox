@@ -1,0 +1,109 @@
+---
+# Judge the REAL role's decisions, recorded by converge.yml.
+#
+# Nothing here re-derives the role's selectattr chain or its needs-update expression. Every
+# assertion below reads a value the role itself produced (`_our_job`, `_needs_update`) or a
+# `pvesh` write the role itself issued — so a regression in roles/proxmox_vzdump/tasks/main.yml
+# turns this red, which is the whole point. A verify that computed the filter chain over a
+# hand-typed stub would assert a copy against itself and stay green through a job-selection bug
+# that leaves guests without backups.
+- name: Verify job-match + idempotency decisions made by the real role
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _results_file: "{{ molecule_ephemeral_directory | default('/tmp') }}/fakebin/results.json"
+  tasks:
+    # converge.yml ran in a different ansible-playbook invocation, so its facts are gone — read
+    # back what it recorded on disk.
+    - name: Read the decisions the real role made during converge
+      ansible.builtin.slurp:
+        src: "{{ _results_file }}"
+      register: _raw
+
+    - name: Load them
+      ansible.builtin.set_fact:
+        vzdump_results: "{{ _raw.content | b64decode | from_json }}"
+
+    - name: The converge must have recorded a result for every case
+      ansible.builtin.assert:
+        that:
+          - vzdump_results is defined
+          - (vzdump_results | length) == 6
+        fail_msg: >-
+          converge.yml recorded {{ vzdump_results | default([]) | length }} result(s), expected 6.
+          The role did not run for every case — do not read the assertions below as a pass.
+        quiet: true
+
+    - name: The role selected the right job and made the right update decision
+      ansible.builtin.assert:
+        that:
+          - item.got_id == item.expect_id
+          - item.got_needs_update == item.expect_needs_update
+        fail_msg: >-
+          {{ item.name }}: role selected id='{{ item.got_id }}' (expected '{{ item.expect_id }}')
+          and needs_update={{ item.got_needs_update }} (expected {{ item.expect_needs_update }}).
+        success_msg: "{{ item.name }}: selection + update decision correct."
+        quiet: true
+      loop: "{{ vzdump_results }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # The decision above is only meaningful if it reached the pvesh call it guards.
+    - name: Case A — an in-sync job must issue NO write at all
+      ansible.builtin.assert:
+        that:
+          - (vzdump_results[0].writes | length) == 0
+        fail_msg: >-
+          An already-in-sync job still issued: {{ vzdump_results[0].writes }}.
+          The role is not idempotent — it rewrites the job on every run.
+        success_msg: "in-sync job → no pvesh write (idempotent)."
+        quiet: true
+
+    - name: Case B — a drifted job must issue exactly one `pvesh set` for OUR job
+      ansible.builtin.assert:
+        that:
+          - (vzdump_results[1].writes | length) == 1
+          - vzdump_results[1].writes[0] is search('^set /cluster/backup/backup-bbb ')
+          - vzdump_results[1].writes[0] is search('-schedule 02:45')
+        fail_msg: "Drifted job produced: {{ vzdump_results[1].writes }}"
+        success_msg: "drifted job → one `pvesh set` against our job id, with the wanted schedule."
+        quiet: true
+
+    - name: Case C — no managed job must issue exactly one `pvesh create`
+      ansible.builtin.assert:
+        that:
+          - (vzdump_results[2].writes | length) == 1
+          - vzdump_results[2].writes[0] is search('^create /cluster/backup ')
+          - vzdump_results[2].writes[0] is not search('someone elses job')
+        fail_msg: "No-managed-job case produced: {{ vzdump_results[2].writes }}"
+        success_msg: "no managed job → one `pvesh create`, and the stranger's job untouched."
+        quiet: true
+
+    - name: Case D — drifted retention alone must issue one `pvesh set` carrying the wanted policy
+      ansible.builtin.assert:
+        that:
+          - (vzdump_results[3].writes | length) == 1
+          - vzdump_results[3].writes[0] is search('^set /cluster/backup/backup-bbb ')
+          - vzdump_results[3].writes[0] is search('-prune-backups keep-daily=3,keep-weekly=2,keep-monthly=1')
+        fail_msg: "Retention-only drift produced: {{ vzdump_results[3].writes }}"
+        success_msg: "retention drift → one `pvesh set` with the wanted prune-backups."
+        quiet: true
+
+    - name: Case E — in-sync retention in mapping form must issue NO write
+      ansible.builtin.assert:
+        that:
+          - (vzdump_results[4].writes | length) == 0
+        fail_msg: >-
+          A job whose retention matches (returned as a mapping) still issued: {{ vzdump_results[4].writes }}.
+          The mapping shape is read as drift, so the job is rewritten on every run.
+        success_msg: "mapping-form retention in sync → no write."
+        quiet: true
+
+    - name: Case F — a job with no prune-backups must be rewritten
+      ansible.builtin.assert:
+        that:
+          - (vzdump_results[5].writes | length) == 1
+          - vzdump_results[5].writes[0] is search('-prune-backups ')
+        fail_msg: "Job without prune-backups produced: {{ vzdump_results[5].writes }}"
+        success_msg: "missing retention → one `pvesh set` that writes it."
+        quiet: true

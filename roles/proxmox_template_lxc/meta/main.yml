@@ -1,0 +1,11 @@
+---
+galaxy_info:
+  namespace: richard_lynch
+  author: Richard Lynch
+  description: >-
+    Download an LXC template to a Proxmox VE storage through the API and verify it is listed there;
+    a cleanup entrypoint removes it.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  galaxy_tags: [proxmox, lxc, template]
+dependencies: []

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Fake dpkg mirroring a representative installed set: 6.8 series only, no 6.14.
+if [[ "$*" == *"-l"* ]]; then
+  echo "Desired=Unknown/Install/Remove/Purge/Hold"
+  echo "ii  proxmox-kernel-6.8                    6.8.12-4    all  Proxmox Kernel Image"
+  echo "ii  proxmox-kernel-6.8.12-4-pve-signed   6.8.12-4    amd64 Proxmox Kernel Image (signed)"
+  echo "ii  proxmox-kernel-6.8.12-2-pve-signed    6.8.12-2     amd64 Proxmox Kernel Image (signed)"
+fi
+exit 0

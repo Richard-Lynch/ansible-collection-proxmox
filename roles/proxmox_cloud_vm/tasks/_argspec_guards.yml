@@ -1,0 +1,91 @@
+---
+# GENERATED from roles/proxmox_cloud_vm/meta/argument_specs.py — DO NOT EDIT.
+# Regenerate with: venv/bin/python tools/argspec/cli.py x generate proxmox_cloud_vm
+#
+# These are the constraints Ansible's role-argspec validator CANNOT enforce. It handles
+# type/required/choices/no_log, but has no numeric-range, length or pattern checking, so
+# without this file those declarations would be decorative.
+#
+# Include from the role's entrypoints:  - ansible.builtin.include_tasks: _argspec_guards.yml
+
+- name: "GUARD (generated) — proxmox_cloud_vm_agent_wait_seconds must be >= 30"
+  ansible.builtin.assert:
+    that:
+      - "proxmox_cloud_vm_agent_wait_seconds | int >= 30"
+    fail_msg: "proxmox_cloud_vm_agent_wait_seconds violates a constraint declared in meta/argument_specs.py: must be >= 30. Got: {{ proxmox_cloud_vm_agent_wait_seconds | default('(unset)') }}"
+    quiet: true
+  when: proxmox_cloud_vm_agent_wait_seconds is defined
+
+- name: "GUARD (generated) — proxmox_cloud_vm_balloon_mb must be >= 0"
+  ansible.builtin.assert:
+    that:
+      - "proxmox_cloud_vm_balloon_mb | int >= 0"
+    fail_msg: "proxmox_cloud_vm_balloon_mb violates a constraint declared in meta/argument_specs.py: must be >= 0. Got: {{ proxmox_cloud_vm_balloon_mb | default('(unset)') }}"
+    quiet: true
+  when: proxmox_cloud_vm_balloon_mb is defined
+
+- name: "GUARD (generated) — proxmox_cloud_vm_cores must be >= 1"
+  ansible.builtin.assert:
+    that:
+      - "proxmox_cloud_vm_cores | int >= 1"
+    fail_msg: "proxmox_cloud_vm_cores violates a constraint declared in meta/argument_specs.py: must be >= 1. Got: {{ proxmox_cloud_vm_cores | default('(unset)') }}"
+    quiet: true
+  when: proxmox_cloud_vm_cores is defined
+
+- name: "GUARD (generated) — proxmox_cloud_vm_disk_gb must be >= 10"
+  ansible.builtin.assert:
+    that:
+      - "proxmox_cloud_vm_disk_gb | int >= 10"
+    fail_msg: "proxmox_cloud_vm_disk_gb violates a constraint declared in meta/argument_specs.py: must be >= 10. Got: {{ proxmox_cloud_vm_disk_gb | default('(unset)') }}"
+    quiet: true
+  when: proxmox_cloud_vm_disk_gb is defined
+
+- name: "GUARD (generated) — proxmox_cloud_vm_memory_mb must be >= 512"
+  ansible.builtin.assert:
+    that:
+      - "proxmox_cloud_vm_memory_mb | int >= 512"
+    fail_msg: "proxmox_cloud_vm_memory_mb violates a constraint declared in meta/argument_specs.py: must be >= 512. Got: {{ proxmox_cloud_vm_memory_mb | default('(unset)') }}"
+    quiet: true
+  when: proxmox_cloud_vm_memory_mb is defined
+
+- name: "GUARD (generated) — proxmox_cloud_vm_name must be matching '\\A[a-z0-9][a-z0-9-]{0,62}\\Z'"
+  ansible.builtin.assert:
+    that:
+      - "proxmox_cloud_vm_name | default('') is match('\\A[a-z0-9][a-z0-9-]{0,62}\\Z')"
+    fail_msg: "proxmox_cloud_vm_name violates a constraint declared in meta/argument_specs.py: must be matching '\\A[a-z0-9][a-z0-9-]{0,62}\\Z'. Got: {{ proxmox_cloud_vm_name | default('(unset)') }}"
+    quiet: true
+  when: proxmox_cloud_vm_name is defined
+
+- name: "GUARD (generated) — proxmox_cloud_vm_snippet_storage must be matching '\\A[A-Za-z0-9][A-Za-z0-9_-]*\\Z'"
+  ansible.builtin.assert:
+    that:
+      - "proxmox_cloud_vm_snippet_storage | default('') is match('\\A[A-Za-z0-9][A-Za-z0-9_-]*\\Z')"
+    fail_msg: "proxmox_cloud_vm_snippet_storage violates a constraint declared in meta/argument_specs.py: must be matching '\\A[A-Za-z0-9][A-Za-z0-9_-]*\\Z'. Got: {{ proxmox_cloud_vm_snippet_storage | default('(unset)') }}"
+    quiet: true
+  when: proxmox_cloud_vm_snippet_storage is defined
+
+- name: "GUARD (generated) — proxmox_cloud_vm_startup_order must be >= 0"
+  ansible.builtin.assert:
+    that:
+      - "proxmox_cloud_vm_startup_order | int >= 0"
+    fail_msg: "proxmox_cloud_vm_startup_order violates a constraint declared in meta/argument_specs.py: must be >= 0. Got: {{ proxmox_cloud_vm_startup_order | default('(unset)') }}"
+    quiet: true
+  when: proxmox_cloud_vm_startup_order is defined
+
+- name: "GUARD (generated) — proxmox_cloud_vm_vlan_tag must be >= 1; <= 4094"
+  ansible.builtin.assert:
+    that:
+      - "proxmox_cloud_vm_vlan_tag | int >= 1"
+      - "proxmox_cloud_vm_vlan_tag | int <= 4094"
+    fail_msg: "proxmox_cloud_vm_vlan_tag violates a constraint declared in meta/argument_specs.py: must be >= 1; <= 4094. Got: {{ proxmox_cloud_vm_vlan_tag | default('(unset)') }}"
+    quiet: true
+  when: proxmox_cloud_vm_vlan_tag is defined
+
+- name: "GUARD (generated) — proxmox_cloud_vm_vmid must be >= 100; <= 999999999"
+  ansible.builtin.assert:
+    that:
+      - "proxmox_cloud_vm_vmid | int >= 100"
+      - "proxmox_cloud_vm_vmid | int <= 999999999"
+    fail_msg: "proxmox_cloud_vm_vmid violates a constraint declared in meta/argument_specs.py: must be >= 100; <= 999999999. Got: {{ proxmox_cloud_vm_vmid | default('(unset)') }}"
+    quiet: true
+  when: proxmox_cloud_vm_vmid is defined

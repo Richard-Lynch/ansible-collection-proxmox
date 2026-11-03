@@ -1,0 +1,172 @@
+---
+# NOTE: nested ansible-playbook invocations below call `ansible-playbook` BY NAME, resolved
+# through PATH. Building the path from VIRTUAL_ENV worked on a developer machine and silently
+# resolved to a NON-EXISTENT /usr/local/bin/ansible-playbook on CI (pip-installed ansible, no
+# VIRTUAL_ENV) — the task then "passed" in 0.3s having run nothing, and a downstream assertion
+# blamed the role. Whichever ansible runs this playbook is on PATH by definition.
+# Runs the REAL role against fake tooling, in four scenarios: dry run, "already installed",
+# no-candidate refusal, and insufficient-space refusal. Paths are redirected via include_role vars
+# (which outrank role vars) and PATH shadowing at play level.
+
+- name: Converge — the real role against a representative host
+  hosts: localhost
+  gather_facts: true
+  # Play-level: `environment:` is not valid on include_role.
+  environment:
+    PATH: "/tmp/molecule-kernel/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  vars:
+    fake_root: /tmp/molecule-kernel
+  tasks:
+    - name: Reset the scratch tree
+      ansible.builtin.file: { path: "{{ fake_root }}", state: absent }
+
+    - name: Create the scratch dirs
+      ansible.builtin.file:
+        path: "{{ fake_root }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: [bin, bin-nocand, bin-nospace, boot]
+
+    - name: Install the fake tools
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/files/{{ item }}"
+        dest: "{{ fake_root }}/bin/{{ item }}"
+        mode: "0755"
+      loop: [dpkg, apt-cache, df, uname]
+
+    - name: Confirm the fakes actually shadow the real tools
+      # A PATH override that fails SILENTLY leaves the role running against the real system,
+      # where every assertion can still pass. A scenario that cannot
+      # distinguish "the fakes worked" from "the fakes were ignored" proves nothing.
+      # `shell`, NOT `command`: `command -v` is a SHELL BUILTIN, so the command module looks for an
+      # executable literally named `command`. Invisible on macOS (which ships /usr/bin/command) and
+      # fatal on the Ubuntu CI runner, which does not.
+      ansible.builtin.shell:
+        cmd: command -v dpkg
+      register: _which
+      changed_when: false
+
+    - name: Assert the shadowing resolved to the fake
+      ansible.builtin.assert:
+        that:
+          - _which.stdout | trim == fake_root ~ '/bin/dpkg'
+        fail_msg: >-
+          PATH override did NOT take effect — resolved '{{ _which.stdout | trim }}'.
+          Every assertion downstream would pass vacuously against the real system.
+        quiet: true
+
+    # --- run 1: DRY RUN -----------------------------------------------------------------------------
+    - name: Run the role in dry-run mode
+      ansible.builtin.include_role:
+        name: proxmox_kernel_install
+      vars:
+        kernel_install_package: proxmox-kernel-6.14
+        kernel_install_apply: false
+
+    - name: Capture the dry-run state
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/captured_dry.json"
+        mode: "0644"
+        content: |
+          {{ {
+               'already': (_k_already | default('unset') | string),
+               'candidate': (_k_candidate.stdout | default('') | trim),
+               'running': (_k_running.stdout | default('') | trim),
+               'boot_free': (_k_boot_free.stdout | default('') | trim),
+             } | to_nice_json }}
+
+    # --- run 2: ALREADY INSTALLED must short-circuit ----------------------------------------------
+    - name: Run the role for a kernel that IS already installed
+      # The idempotence path: 6.8 is installed on the fixture host, so the role must report
+      # "nothing to do" and take no apply branch even with apply=true.
+      ansible.builtin.include_role:
+        name: proxmox_kernel_install
+      vars:
+        kernel_install_package: proxmox-kernel-6.8
+        kernel_install_apply: true
+
+    - name: Capture the already-installed state
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/captured_already.json"
+        mode: "0644"
+        content: |
+          {{ {'already': (_k_already | default('unset') | string)} | to_nice_json }}
+
+# --- run 3 + 4: the two refusal paths ------------------------------------------------------------
+# Separate play and subprocesses, because the role is EXPECTED to fail and a failing include_role
+# would abort the play above.
+- name: Converge — the refusal paths
+  hosts: localhost
+  gather_facts: false
+  vars:
+    fake_root: /tmp/molecule-kernel
+  tasks:
+    - name: Install a fake apt-cache that reports NO candidate
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/bin-nocand/apt-cache"
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          echo "proxmox-kernel-9.99:"
+          echo "  Installed: (none)"
+          echo "  Candidate: (none)"
+          exit 0
+
+    - name: Install a fake df reporting a nearly-full /boot
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/bin-nospace/df"
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          echo "Filesystem 1M-blocks Used Available Use% Mounted on"
+          echo "/dev/mapper/pve-root 96000 95800 200 100% /"
+          exit 0
+
+    - name: Write the refusal plays
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/refuse_{{ item.name }}.yml"
+        mode: "0644"
+        content: |
+          - hosts: localhost
+            gather_facts: true
+            environment:
+              PATH: "{{ fake_root }}/{{ item.bin }}:{{ fake_root }}/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            tasks:
+              - include_role:
+                  name: proxmox_kernel_install
+                vars:
+                  kernel_install_package: {{ item.pkg }}
+                  kernel_install_apply: true
+      loop:
+        - { name: nocand, bin: bin-nocand, pkg: proxmox-kernel-9.99 }
+        - { name: nospace, bin: bin-nospace, pkg: proxmox-kernel-6.14 }
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Run the refusal plays, expecting failure
+      ansible.builtin.command:
+        cmd: >-
+          ansible-playbook
+          -i localhost, -c local {{ fake_root }}/refuse_{{ item }}.yml
+      environment:
+        ANSIBLE_ROLES_PATH: "{{ (playbook_dir ~ '/../../..') | realpath }}"
+        # Pinned so the assert's fail message reaches stdout — molecule's own callback suppresses
+        # it, which would make the refusal REASON unassertable even when the role refuses correctly.
+        ANSIBLE_STDOUT_CALLBACK: default
+        ANSIBLE_LOAD_CALLBACK_PLUGINS: "0"
+      register: _refusals
+      changed_when: false
+      failed_when: false
+      loop: [nocand, nospace]
+
+    - name: Record the refusal results
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/captured_refusals.json"
+        mode: "0644"
+        content: |
+          {{ {
+               'nocand_rc': _refusals.results[0].rc,
+               'nocand_out': ((_refusals.results[0].stdout | default('')) ~ (_refusals.results[0].stderr | default(''))),
+               'nospace_rc': _refusals.results[1].rc,
+               'nospace_out': ((_refusals.results[1].stdout | default('')) ~ (_refusals.results[1].stderr | default(''))),
+             } | to_nice_json }}

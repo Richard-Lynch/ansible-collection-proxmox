@@ -1,0 +1,32 @@
+# Copyright: (c) 2026, Richard Lynch
+# GNU General Public License v3.0+ (see https://www.gnu.org/licenses/gpl-3.0.txt)
+---
+DOCUMENTATION:
+  name: dpl_lxc_update_netif
+  short_description: The interfaces an LXC configuration update should send
+  author: Richard Lynch (@Richard-Lynch)
+  description:
+    - Returns an empty dict (send no C(netif)) unless a declared interface itself drifted.
+    - When one did, returns every declared interface with its live C(hwaddr), as
+      P(richard_lynch.proxmox.dpl_lxc_netif_with_live_hwaddr#filter) does, so the update never changes a MAC.
+  options:
+    _input:
+      description: The declared interfaces, C(netN) to a C(k=v,...) string, or its JSON.
+      type: raw
+      required: true
+    current:
+      description: The live configuration dict.
+      type: dict
+      required: true
+    drift:
+      description: The drift dict, as P(richard_lynch.proxmox.dpl_lxc_config_drift#filter) returns it.
+      type: dict
+      required: true
+EXAMPLES: |
+  - name: Interfaces for the update, or none
+    ansible.builtin.set_fact:
+      update_netif: "{{ declared_net | richard_lynch.proxmox.dpl_lxc_update_netif(live_config, drift) }}"
+RETURN:
+  _value:
+    description: The interfaces to send, or an empty dict.
+    type: dict

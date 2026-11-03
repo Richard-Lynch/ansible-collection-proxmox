@@ -1,0 +1,77 @@
+---
+# proxmox_ci_access — idempotently create the CI user, its role, ACLs, and its API token.
+# Runs `pveum` on a PVE node (community.proxmox has no role/token module). Every command is guarded
+# so re-runs are no-ops. The token secret is emitted ONCE on first creation for the caller to store
+# in its secret manager; it is never written to disk by this role.
+
+- name: Create the CI role with the least-privilege priv set
+  ansible.builtin.command:
+    cmd: "pveum role add {{ proxmox_ci_access_role }} -privs \"{{ proxmox_ci_access_privs | join(' ') }}\""
+  register: _role_add
+  changed_when: "'already exists' not in (_role_add.stderr | default('')) and _role_add.rc == 0"
+  failed_when:
+    - _role_add.rc != 0
+    - "'already exists' not in (_role_add.stderr | default(''))"
+
+- name: Keep the role's privs in sync (idempotent update)
+  ansible.builtin.command:
+    cmd: "pveum role modify {{ proxmox_ci_access_role }} -privs \"{{ proxmox_ci_access_privs | join(' ') }}\""
+  register: _role_mod
+  changed_when: false # modify is declarative; don't flap changed
+
+- name: Create the CI user
+  community.proxmox.proxmox_user:
+    api_host: "{{ proxmox.api_host }}"
+    api_user: "{{ proxmox.user }}"
+    api_token_id: "{{ proxmox.api_token_id }}"
+    api_token_secret: "{{ proxmox.api_token_secret }}"
+    userid: "{{ proxmox_ci_access_user }}"
+    state: present
+
+- name: Grant the role to the user on the ACL path
+  community.proxmox.proxmox_access_acl:
+    api_host: "{{ proxmox.api_host }}"
+    api_user: "{{ proxmox.user }}"
+    api_token_id: "{{ proxmox.api_token_id }}"
+    api_token_secret: "{{ proxmox.api_token_secret }}"
+    path: "{{ proxmox_ci_access_acl_path }}"
+    roleid: "{{ proxmox_ci_access_role }}"
+    ugid: "{{ proxmox_ci_access_user }}"
+    type: user
+    state: present
+
+- name: Check whether the CI token already exists
+  ansible.builtin.command:
+    cmd: "pveum user token list {{ proxmox_ci_access_user }} --output-format json"
+  register: _token_list
+  changed_when: false
+
+- name: Create the CI token (privsep) if absent
+  ansible.builtin.command:
+    cmd: >-
+      pveum user token add {{ proxmox_ci_access_user }} {{ proxmox_ci_access_token }}
+      --privsep {{ proxmox_ci_access_token_privsep }} --output-format json
+  register: _token_add
+  when: "proxmox_ci_access_token not in (_token_list.stdout | default('[]'))"
+  changed_when: _token_add is not skipped
+
+- name: Grant the role to the TOKEN as well (privsep tokens have their own privileges)
+  community.proxmox.proxmox_access_acl:
+    api_host: "{{ proxmox.api_host }}"
+    api_user: "{{ proxmox.user }}"
+    api_token_id: "{{ proxmox.api_token_id }}"
+    api_token_secret: "{{ proxmox.api_token_secret }}"
+    path: "{{ proxmox_ci_access_acl_path }}"
+    roleid: "{{ proxmox_ci_access_role }}"
+    ugid: "{{ proxmox_ci_access_user }}!{{ proxmox_ci_access_token }}"
+    type: token
+    state: present
+  when: proxmox_ci_access_token_privsep | int == 1
+
+- name: Emit the token secret ONCE (store it now — it cannot be retrieved later)
+  ansible.builtin.debug:
+    msg: >-
+      NEW {{ proxmox_ci_access_user }}!{{ proxmox_ci_access_token }} token created. STORE THIS
+      {{ ('as ' ~ proxmox_ci_access_secret_name ~ ' ') if proxmox_ci_access_secret_name | length > 0 else '' }}NOW
+      (secret shown once): {{ (_token_add.stdout | from_json).value }}
+  when: _token_add is not skipped and _token_add.stdout is defined

@@ -1,0 +1,16 @@
+---
+# Reduce a job's `prune-backups` to ONE comparable string. Input: `_prune_in`. Output: `_prune_out`.
+#
+# WHY: pvesh can hand this back as a property-string ("keep-daily=3,keep-monthly=1,keep-weekly=2",
+# which is also how jobs.cfg stores it, keys sorted) or as a mapping, and a missing field is
+# neither. Comparing the raw value against a string built here would report drift forever on one
+# shape and never on the other. Sorting the "key=value" pieces puts both on the alphabetical order
+# PVE itself writes.
+- name: Normalise retention to a sorted key=value string
+  ansible.builtin.set_fact:
+    _prune_out: |-
+      {%- if _prune_in is mapping -%}
+      {%- for k in _prune_in | sort -%}{{ k }}={{ _prune_in[k] }}{{ '' if loop.last else ',' }}{%- endfor -%}
+      {%- else -%}
+      {{ (_prune_in | default('', true) | string).split(',') | reject('equalto', '') | sort | join(',') }}
+      {%- endif -%}

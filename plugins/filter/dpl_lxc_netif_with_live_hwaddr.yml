@@ -1,0 +1,29 @@
+# Copyright: (c) 2026, Richard Lynch
+# GNU General Public License v3.0+ (see https://www.gnu.org/licenses/gpl-3.0.txt)
+---
+DOCUMENTATION:
+  name: dpl_lxc_netif_with_live_hwaddr
+  short_description: Declared LXC interfaces, each carrying its live MAC address
+  author: Richard Lynch (@Richard-Lynch)
+  description:
+    - Appends the live interface's C(hwaddr) to every declared C(netN) that does not declare one.
+    - Proxmox VE replaces a C(netN) value wholesale and generates a new MAC for a value without
+      C(hwaddr), so an interface written without it gets a new address and a new DHCP lease.
+    - A declared C(hwaddr) wins. An interface that does not exist yet is returned unchanged.
+  options:
+    _input:
+      description: The declared interfaces, C(netN) to a C(k=v,...) string, or its JSON.
+      type: raw
+      required: true
+    current:
+      description: The live configuration dict.
+      type: dict
+      required: true
+EXAMPLES: |
+  - name: Keep each interface's MAC
+    ansible.builtin.set_fact:
+      netif: "{{ {'net0': 'name=eth0,bridge=vmbr0,ip=dhcp'} | richard_lynch.proxmox.dpl_lxc_netif_with_live_hwaddr(live_config) }}"
+RETURN:
+  _value:
+    description: The declared interfaces, C(netN) to a C(k=v,...) string.
+    type: dict

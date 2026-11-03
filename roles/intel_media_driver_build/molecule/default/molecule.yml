@@ -1,0 +1,21 @@
+---
+# Offline: runs the REAL role against fake lspci/pct modelling the failing case (Arc on xe with
+# renderD129, jellyfin container present, bundled vainfo SIGBUSing, patched driver absent).
+#
+# Coverage: the device resolution, the vfio/guest refusals,
+# the before/after probe logic and the outcome gate are genuinely exercised.
+# NOT covered, and not claimed: the actual docker build (needs a real toolchain and ~20 minutes),
+# artifact extraction, and whether the patched driver truly fixes the GPU — only real hardware
+# answers that.
+dependency: { name: galaxy }
+driver: { name: default }
+platforms: [{ name: localhost }]
+provisioner:
+  name: ansible
+  inventory: { host_vars: { localhost: { ansible_connection: local } } }
+  playbooks: { converge: converge.yml, verify: verify.yml }
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../"
+verifier: { name: ansible }
+scenario:
+  test_sequence: [syntax, converge, verify]

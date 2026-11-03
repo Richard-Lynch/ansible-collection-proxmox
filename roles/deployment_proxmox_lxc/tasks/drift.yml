@@ -1,0 +1,53 @@
+---
+# Pure computation: no API call, no credential. Reads the live config (already fetched into
+# deployment_proxmox_lxc__current_config) and the declared container, and sets
+# deployment_proxmox_lxc__drift to {key: {current, desired}} for every DECLARED key that differs.
+#
+# Split out so molecule runs THIS file rather than a copy of it (MOLMIRROR-01). The comparison
+# itself is the richard_lynch.proxmox.dpl_lxc_config_drift filter (plugins/filter/lxc_config_drift.py, a
+# collection plugin: a role inside a collection never loads its own filter_plugins/), which
+# documents why the proxmox module's own change detection cannot be trusted.
+
+- name: Build the declared configuration in the shape the comparison takes
+  ansible.builtin.set_fact:
+    deployment_proxmox_lxc__desired_config:
+      hostname: "{{ deployment_proxmox_lxc_container.hostname }}"
+      description: "{{ deployment_proxmox_lxc_container.description | default(none) }}"
+      cores: "{{ deployment_proxmox_lxc_container.cores }}"
+      memory: "{{ deployment_proxmox_lxc_container.memory_mb }}"
+      swap: "{{ deployment_proxmox_lxc_container.swap_mb }}"
+      onboot: "{{ deployment_proxmox_lxc_container.onboot }}"
+      tags: "{{ deployment_proxmox_lxc_container.tags | default(none) }}"
+      features: "{{ deployment_proxmox_lxc_container.features | default({}) }}"
+      startup: "{{ deployment_proxmox_lxc_container.startup | default({}) }}"
+      # The netif carries each interface's LIVE hwaddr, so what is compared is exactly what the
+      # update would write — and a hwaddr matching the live one is not drift.
+      net: >-
+        {{ deployment_proxmox_lxc_container_netif
+           | richard_lynch.proxmox.dpl_lxc_netif_with_live_hwaddr(deployment_proxmox_lxc__current_config) }}
+      rootfs:
+        storage: "{{ deployment_proxmox_lxc_container.storage }}"
+        size_gb: "{{ deployment_proxmox_lxc_container.storage_gb }}"
+
+- name: Compare it with the live configuration
+  ansible.builtin.set_fact:
+    deployment_proxmox_lxc__drift: >-
+      {{ deployment_proxmox_lxc__current_config
+         | richard_lynch.proxmox.dpl_lxc_config_drift(deployment_proxmox_lxc__desired_config) }}
+
+- name: Report the drift (empty means the update is skipped and the guest is left running)
+  ansible.builtin.debug:
+    msg: >-
+      {{ deployment_proxmox_lxc_container.hostname }}: drift in
+      {{ deployment_proxmox_lxc__drift.keys() | list | sort | join(', ') if deployment_proxmox_lxc__drift
+         else 'nothing' }}
+
+- name: Decide what the update writes for the interfaces
+  # NEVER a netN without its hwaddr: PVE replaces the whole value and generates a new MAC, and the
+  # guest takes a new DHCP lease, even on a description-only drift.
+  # Empty (the update omits netif) unless an interface drifted; otherwise every declared interface
+  # with its live hwaddr.
+  ansible.builtin.set_fact:
+    deployment_proxmox_lxc__update_netif: >-
+      {{ deployment_proxmox_lxc_container_netif
+         | richard_lynch.proxmox.dpl_lxc_update_netif(deployment_proxmox_lxc__current_config, deployment_proxmox_lxc__drift) }}

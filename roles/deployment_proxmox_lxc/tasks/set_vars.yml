@@ -1,0 +1,47 @@
+---
+# CONSTANTS
+# - name: Set constants
+#   ansible.builtin.set_fact:
+#     deployment_proxmox_lxc_const:
+#       type: "lxc"
+
+#       utils_verify_connection_wait_timeout: 120
+#       utils_verify_connection_wait_connect_timeout: 60
+#       utils_verify_connection_wait_delay: 0
+#       utils_verify_connection_wait_sleep: 1
+
+- name: Defaulting deployment_proxmox_lxc_template using defaults in deployment_proxmox_lxc_template__default
+  ansible.builtin.set_fact:
+    deployment_proxmox_lxc_template: >-
+      {{ (deployment_proxmox_lxc_template__default
+        | combine(deployment_proxmox_lxc_template, recursive=True))
+        if deployment_proxmox_lxc_template is defined
+        else deployment_proxmox_lxc_template__default }}
+
+- name: Defaulting deployment_proxmox_lxc_container using defaults in deployment_proxmox_lxc_container__default
+  ansible.builtin.set_fact:
+    deployment_proxmox_lxc_container: >-
+      {{ (deployment_proxmox_lxc_container__default
+        | combine(deployment_proxmox_lxc_container, recursive=True))
+        if deployment_proxmox_lxc_container is defined
+        else deployment_proxmox_lxc_container__default }}
+
+# Pre-process
+- name: Transform netif values to json
+  # Renders each interface to PVE's `k=v,k=v` form.
+  #
+  # No loop, and each entry is rendered from ITS OWN value. A loop over the netif entries that,
+  # inside the expression, maps `combine` across the WHOLE dict using `item.value` (the current
+  # loop item) rewrites every key with the same value on each pass, leaving all of them holding
+  # the LAST interface's settings. With one interface that is indistinguishable from correct;
+  # with several, every interface renders as the last one and the container refuses to start
+  # ("Failed to rename network device to ethN - File exists"). Note `.items()` yields (k, v)
+  # TUPLES, so `join('=')` gives `k=v`; `dict2items` would yield {'key':..,'value':..} mappings
+  # whose join renders the literal text `key=value`.
+  ansible.builtin.set_fact:
+    deployment_proxmox_lxc_container_netif: >-
+      {%- set _pairs = [] -%}
+      {%- for _k, _v in deployment_proxmox_lxc_container.netif.items() -%}
+      {%-   set _ = _pairs.append([_k, _v.items() | map('join', '=') | join(',')]) -%}
+      {%- endfor -%}
+      {{ dict(_pairs) | tojson }}

@@ -1,0 +1,19 @@
+# Load the role's defaults without running privileged LVM tasks (tags: never on the real work would be
+# ideal; here we just assert the computed values are sane).
+---
+- name: Converge — defaults coherence
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Load role defaults
+      ansible.builtin.include_vars:
+        file: "../../defaults/main.yml"
+    - name: Sanity-check the derived device path + prune policy
+      ansible.builtin.assert:
+        that:
+          - proxmox_storage_layout_backup_lv | length > 0
+          - proxmox_storage_layout_backup_mount.startswith('/')
+          - "'backup' in proxmox_storage_layout_pve_content"
+          - "'keep-daily' in proxmox_storage_layout_prune"
+        fail_msg: "proxmox_storage_layout defaults are incoherent"
+        success_msg: "defaults OK"

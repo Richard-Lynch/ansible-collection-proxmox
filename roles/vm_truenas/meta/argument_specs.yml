@@ -1,0 +1,169 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/vm_truenas/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate vm_truenas
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Creates a TrueNAS VM on Proxmox and pauses for the manual install
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      truenas_vm_iso_url:
+        description:
+          - e.g.
+          - https://download.sys.truenas.net/TrueNAS-SCALE-Fangtooth/25.04.0/TrueNAS-SCALE-25.04.0.iso
+        type: str
+        required: true
+      truenas_password:
+        type: str
+        required: true
+      truenas_callback_url:
+        type: str
+        required: true
+      truenas_vm_vlan:
+        description:
+          - The VLAN config for the primary network connection of the VM
+          - Normally one entry of a VLAN map kept in the inventory
+        type: dict
+        required: true
+        options:
+          id:
+            type: int
+            required: true
+          name:
+            type: str
+            required: true
+          domain_name:
+            description:
+              - FQDN
+            type: str
+            required: true
+          gateway:
+            description:
+              - The VLAN gateway address, e.g. `192.0.2.1`
+            type: str
+            required: true
+          dns:
+            description:
+              - The VLAN DNS server address, e.g. `192.0.2.53`
+            type: str
+            required: false
+          base:
+            description:
+              - The VLAN network address, e.g. `192.0.2.0`
+            type: str
+            required: true
+          cidr:
+            type: int
+            required: true
+      truenas_vm_name:
+        type: str
+        required: true
+      truenas_vm_id:
+        type: int
+        required: true
+      truenas_vm_startup_order:
+        description:
+          - The order Proxmox should start this container relative to the others
+        type: int
+        required: true
+      truenas_vm_storage:
+        type: str
+        required: false
+        default: local-lvm
+        choices:
+          - local
+          - local-lvm
+      truenas_vm_disk_size:
+        type: int
+        required: false
+        default: 64
+      truenas_vm_memory:
+        type: int
+        required: false
+        default: 16384
+      truenas_vm_cores:
+        type: int
+        required: false
+        default: 4
+      truenas_vm_bridge:
+        type: str
+        required: true
+      truenas_vm_hostpci:
+        description:
+          - https://docs.ansible.com/ansible/latest/collections/community/general/proxmox_kvm_module.html#parameter-hostpci
+        type: dict
+        required: false
+        options:
+          hostpci0:
+            type: str
+            required: false
+          hostpci1:
+            type: str
+            required: false
+          hostpci2:
+            type: str
+            required: false
+          hostpci3:
+            type: str
+            required: false
+          hostpci4:
+            type: str
+            required: false
+          hostpci5:
+            type: str
+            required: false
+          hostpci6:
+            type: str
+            required: false
+          hostpci7:
+            type: str
+            required: false
+          hostpci8:
+            type: str
+            required: false
+          hostpci9:
+            type: str
+            required: false
+  cleanup_boot:
+    short_description: Detaches the TrueNAS install ISO and restarts the VM
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      proxmox:
+        description: Common arguments required to interact with Proxmox
+        type: dict
+        required: true
+        options:
+          cluster:
+            type: str
+            required: true
+          node:
+            type: str
+            required: true
+          user:
+            type: str
+            required: true
+          password:
+            type: str
+            required: true
+          api_host:
+            type: str
+            required: true
+          api_token_id:
+            type: str
+            required: true
+          api_token_secret:
+            type: str
+            required: true
+          is_primary:
+            type: bool
+            required: true
+      truenas_vm_id:
+        type: int
+        required: true

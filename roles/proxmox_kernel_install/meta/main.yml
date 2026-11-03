@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  namespace: richard_lynch
+  author: Richard Lynch
+  description: >-
+    Install an extra Proxmox VE kernel series beside the running one, behind an apply flag: check
+    the apt candidate and /boot free space, then verify the package and that every kernel image has
+    an initramfs. Never removes a kernel or reboots.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  platforms:
+    - name: Debian
+      versions: [bookworm]
+  galaxy_tags: [proxmox, kernel, apt, hypervisor]
+dependencies: []

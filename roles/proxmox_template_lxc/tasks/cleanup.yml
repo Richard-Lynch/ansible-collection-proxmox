@@ -1,0 +1,10 @@
+---
+- name: Delete the template
+  community.general.proxmox_template:
+    api_host: "{{ proxmox.api_host }}"
+    api_user: "{{ proxmox.user }}"
+    api_token_id: "{{ proxmox.api_token_id }}"
+    api_token_secret: "{{ proxmox.api_token_secret }}"
+    node: "{{ proxmox.node }}"
+    template: "{{ proxmox_template_lxc_name }}"
+    state: absent

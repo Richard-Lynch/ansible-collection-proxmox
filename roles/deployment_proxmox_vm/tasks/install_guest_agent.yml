@@ -1,0 +1,19 @@
+---
+# TODO this should be pulled out to be its own role, and should support using ssh/ansible to the VM and also proxmox commands (aka to the host)
+- name: Install qemu guest agent on VM
+  delegate_to: "{{ deployment_proxmox_vm_machine.name }}"
+  delegate_facts: true
+  become: true
+  ansible.builtin.package:
+    name: qemu-guest-agent
+    state: present
+    update_cache: true
+    install_recommends: true
+
+- name: Restart qemu guest agent on VM
+  delegate_to: "{{ deployment_proxmox_vm_machine.name }}"
+  delegate_facts: true
+  become: true
+  ansible.builtin.service:
+    name: qemu-guest-agent
+    state: restarted

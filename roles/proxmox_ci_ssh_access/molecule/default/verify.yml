@@ -1,0 +1,18 @@
+---
+- name: Verify least-privilege sudoers
+  hosts: localhost
+  gather_facts: false
+  vars_files: ["{{ playbook_dir }}/../../defaults/main.yml"]
+  tasks:
+    - name: Sudo is restricted to exactly pct/qm/pvesh (no shell/apt/pvecm)
+      ansible.builtin.assert:
+        that:
+          - proxmox_ci_ssh_sudo_commands | length == 3
+          - "'/usr/sbin/pct' in proxmox_ci_ssh_sudo_commands"
+          - "'/usr/sbin/qm' in proxmox_ci_ssh_sudo_commands"
+          - "'/usr/bin/pvesh' in proxmox_ci_ssh_sudo_commands"
+          # exact-match check for dangerous binaries (substring would false-match pveSH)
+          - (proxmox_ci_ssh_sudo_commands | map('basename') | list)
+            | intersect(['bash', 'sh', 'apt', 'apt-get', 'pvecm', 'su']) | length == 0
+        fail_msg: "ci sudoers grants more than pct/qm/pvesh — least-privilege violated!"
+        success_msg: "sudoers is least-privilege (pct/qm/pvesh only)."

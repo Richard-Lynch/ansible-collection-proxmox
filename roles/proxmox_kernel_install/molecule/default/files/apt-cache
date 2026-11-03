@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Fake apt-cache: 6.14 available (the candidate), 6.8 already installed.
+case "$*" in
+  *6.14*) echo "proxmox-kernel-6.14:"; echo "  Installed: (none)"; echo "  Candidate: 6.14.8-2~bpo12+1" ;;
+  *6.8*)  echo "proxmox-kernel-6.8:";  echo "  Installed: 6.8.12-4"; echo "  Candidate: 6.8.12-4" ;;
+  *)      echo "  Candidate: (none)" ;;
+esac
+exit 0

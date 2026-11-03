@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  namespace: richard_lynch
+  author: Richard Lynch
+  description: >-
+    Download an ISO or disk image from a URL into a Proxmox VE node's local ISO directory, re-
+    downloading when the local copy is older than a set number of days, and set its path and storage
+    volume as facts.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  galaxy_tags: [proxmox, iso, download]
+dependencies: []

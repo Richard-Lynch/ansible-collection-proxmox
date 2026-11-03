@@ -1,0 +1,60 @@
+---
+# The plan, as facts. Nothing here touches the node, so the molecule scenario includes this file
+# and asserts on the commands it WOULD run (MOLMIRROR-02: the scenario reads the role's own plan).
+- name: Derive the image path on the node
+  ansible.builtin.set_fact:
+    _pcv_image_path: "{{ proxmox_cloud_vm_image_dir }}/{{ proxmox_cloud_vm_image.url | urlsplit('path') | basename }}"
+
+- name: Desired settings that may be converged on a live VM
+  ansible.builtin.set_fact:
+    _pcv_desired: >-
+      {{ {
+           'memory': proxmox_cloud_vm_memory_mb | int,
+           'balloon': proxmox_cloud_vm_balloon_mb | int,
+           'cores': proxmox_cloud_vm_cores | int,
+           'onboot': 1 if (proxmox_cloud_vm_onboot | bool) else 0,
+           'tags': proxmox_cloud_vm_tags | sort | join(';'),
+           'description': proxmox_cloud_vm_description | trim,
+         } | combine({'startup': 'order=' ~ proxmox_cloud_vm_startup_order} if (proxmox_cloud_vm_startup_order | int) > 0 else {}) }}
+
+- name: The cloud-init vendor-data that installs the guest agent
+  # The Ubuntu cloud image does not include qemu-guest-agent, and the agent answering is this
+  # role's readiness signal. Vendor-data (not user-data) so the user and key Proxmox writes stay.
+  ansible.builtin.set_fact:
+    _pcv_vendor_name: "vm-{{ proxmox_cloud_vm_vmid }}-vendor.yaml"
+    _pcv_vendor_content: |
+      #cloud-config
+      packages:
+        - qemu-guest-agent
+      runcmd:
+        - [systemctl, enable, --now, qemu-guest-agent]
+
+- name: The create command
+  # Every value is a separate argv element, so nothing is parsed by a shell. The root disk is
+  # imported from the checksummed image; the cloud-init drive carries the user, key and DHCP.
+  ansible.builtin.set_fact:
+    _pcv_create_argv: >-
+      {{ ['qm', 'create', proxmox_cloud_vm_vmid | string,
+          '--name', proxmox_cloud_vm_name,
+          '--memory', proxmox_cloud_vm_memory_mb | string,
+          '--balloon', proxmox_cloud_vm_balloon_mb | string,
+          '--cores', proxmox_cloud_vm_cores | string,
+          '--cpu', 'host',
+          '--machine', 'q35',
+          '--ostype', 'l26',
+          '--scsihw', 'virtio-scsi-single',
+          '--scsi0', proxmox_cloud_vm_storage ~ ':0,import-from=' ~ _pcv_image_path ~ ',discard=on,iothread=1',
+          '--ide2', proxmox_cloud_vm_storage ~ ':cloudinit',
+          '--boot', 'order=scsi0',
+          '--net0', 'virtio,bridge=' ~ proxmox_cloud_vm_bridge ~ ',tag=' ~ proxmox_cloud_vm_vlan_tag,
+          '--agent', 'enabled=1',
+          '--serial0', 'socket',
+          '--vga', 'serial0',
+          '--ciuser', proxmox_cloud_vm_ci_user,
+          '--sshkeys', '/run/proxmox_cloud_vm-' ~ proxmox_cloud_vm_vmid ~ '.pub',
+          '--ipconfig0', 'ip=dhcp',
+          '--cicustom', 'vendor=' ~ proxmox_cloud_vm_snippet_storage ~ ':snippets/' ~ _pcv_vendor_name,
+          '--onboot', _pcv_desired.onboot | string,
+          '--tags', _pcv_desired.tags,
+          '--description', _pcv_desired.description or proxmox_cloud_vm_name]
+         + (['--startup', _pcv_desired.startup] if _pcv_desired.startup is defined else []) }}

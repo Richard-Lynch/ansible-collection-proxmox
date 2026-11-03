@@ -1,0 +1,145 @@
+---
+# READ FIRST, then decide. The proxmox module's own change detection is wrong for `tags` and
+# `description` (see the richard_lynch.proxmox.dpl_lxc_config_drift filter): calling it with `update: true` (its
+# default) re-PUTs the config and reports changed on every run, and restarting on that would
+# reboot the container on every converge — once here, and once more in proxmox_lxc_docker_fix,
+# whose comment markers the re-PUT erases.
+#
+# So the live config is read once, the drift is computed by OUR comparison, the update runs
+# only when there is drift, and a running guest restarts only when a drifted key needs it.
+- name: Read the container's current status and configuration
+  register: deployment_proxmox_lxc__vm_info
+  community.general.proxmox_vm_info:
+    node: "{{ proxmox.node }}"
+    api_host: "{{ proxmox.api_host }}"
+    api_user: "{{ proxmox.user }}"
+    api_token_id: "{{ proxmox.api_token_id }}"
+    api_token_secret: "{{ proxmox.api_token_secret }}"
+    type: "{{ deployment_proxmox_lxc_const.type }}"
+    vmid: "{{ deployment_proxmox_lxc_container.vmid }}"
+    config: current
+
+- name: Record whether the container exists, and its status
+  # An unknown vmid is an EMPTY list, not a failure (proxmox_vm_info filters the cluster's
+  # resources), so "absent" is a positive reading here and not a swallowed error.
+  ansible.builtin.set_fact:
+    deployment_proxmox_lxc__exists: "{{ deployment_proxmox_lxc__vm_info.proxmox_vms | length > 0 }}"
+    deployment_proxmox_lxc__current_status: >-
+      {{ (deployment_proxmox_lxc__vm_info.proxmox_vms | first).status
+         if deployment_proxmox_lxc__vm_info.proxmox_vms | length > 0 else 'absent' }}
+    deployment_proxmox_lxc__current_config: >-
+      {{ (deployment_proxmox_lxc__vm_info.proxmox_vms | first).config | default({})
+         if deployment_proxmox_lxc__vm_info.proxmox_vms | length > 0 else {} }}
+
+- name: Create LXC container
+  when: not deployment_proxmox_lxc__exists
+  community.general.proxmox: &deployment_proxmox_lxc__container_info
+    node: "{{ proxmox.node }}"
+    api_host: "{{ proxmox.api_host }}"
+    api_user: "{{ proxmox.user }}"
+    api_token_id: "{{ proxmox.api_token_id }}"
+    api_token_secret: "{{ proxmox.api_token_secret }}"
+    vmid: "{{ deployment_proxmox_lxc_container.vmid }}"
+    hostname: "{{ deployment_proxmox_lxc_container.hostname }}"
+    ostemplate: "{{ deployment_proxmox_lxc_template.storage }}:vztmpl/{{ deployment_proxmox_lxc_template.name }}"
+    password: "{{ deployment_proxmox_lxc_container.password }}"
+    netif: "{{ deployment_proxmox_lxc_container_netif }}"
+    description: "{{ deployment_proxmox_lxc_container.description }}"
+    tags: "{{ deployment_proxmox_lxc_container.tags }}"
+    features: "{{ deployment_proxmox_lxc_container.features.items() | map('join', '=') }}"
+    pubkey: "{{ public_ssh_key }}"
+    cores: "{{ deployment_proxmox_lxc_container.cores }}"
+    disk: "{{ deployment_proxmox_lxc_container.storage }}:{{ deployment_proxmox_lxc_container.storage_gb }}"
+    memory: "{{ deployment_proxmox_lxc_container.memory_mb }}"
+    swap: "{{ deployment_proxmox_lxc_container.swap_mb }}"
+    # `startup` is OPTIONAL in the argspec, so dereferencing .startup unconditionally made the role
+    # fail for any caller that omitted it ("object of type 'dict' has no attribute 'startup'") —
+    # every existing caller happened to pass one, so the gap only surfaced when a guest that should
+    # NOT autostart was created. default({}) yields an empty list, which is what "no startup
+    # ordering" means to Proxmox.
+    # OMITTED entirely when no startup ordering was asked for. An EMPTY list is not the same as
+    # absent: Proxmox rejects it with "invalid format - unable to parse startup options". `omit`
+    # removes the parameter from the API call, which is what "no ordering" actually means.
+    startup: >-
+      {{ (deployment_proxmox_lxc_container.startup.items() | map('join', '=') | list)
+         if (deployment_proxmox_lxc_container.startup | default({})) else omit }}
+    onboot: "{{ deployment_proxmox_lxc_container.onboot }}"
+    state: present
+
+- name: Compute the drift between the declared and the live configuration
+  # tasks/drift.yml is pure computation (no API), so molecule exercises the same file.
+  ansible.builtin.include_tasks: drift.yml
+  when: deployment_proxmox_lxc__exists
+
+- name: Update container configuration
+  when:
+    - deployment_proxmox_lxc__exists
+    - deployment_proxmox_lxc__drift | length > 0
+  register: deployment_proxmox_lxc__update
+  community.general.proxmox:
+    <<: *deployment_proxmox_lxc__container_info
+    ostemplate: "{{ omit }}"
+    # From drift.yml: omitted unless an interface drifted, and then each one carries its LIVE
+    # hwaddr. The shared anchor's netif has none, and a netN re-PUT without it gets a new MAC.
+    netif: "{{ deployment_proxmox_lxc__update_netif if deployment_proxmox_lxc__update_netif else omit }}"
+    update: true
+
+- name: Decide whether the container must be started or restarted
+  # started    — it is not running (including just created): `started` is a no-op if it is.
+  # restarted  — it WAS running and a drifted key is one a running guest only picks up on restart.
+  # Anything else leaves a running guest alone. The old rule restarted EVERY running guest.
+  ansible.builtin.set_fact:
+    deployment_proxmox_lxc__desired_state: >-
+      {{ 'restarted'
+         if (deployment_proxmox_lxc__current_status == 'running'
+             and (deployment_proxmox_lxc__update is changed)
+             and (deployment_proxmox_lxc__drift | default({}) | richard_lynch.proxmox.dpl_lxc_drift_needs_restart))
+         else 'started' }}
+
+# `meta:` runs synchronously in the strategy plugin and ALWAYS IGNORES until:/retries:/delay:, so
+# this refreshed the inventory exactly ONCE — a container whose address had not yet appeared was
+# never waited for. The until: condition was also unfalsifiable in its own right: `hostvars[name]`
+# for an unknown host is an empty mapping, not null, so `!= null` was true on the first pass no
+# matter what. Two independent reasons the same wait could never wait.
+- name: Refresh the dynamic inventory so the new container appears
+  delegate_to: localhost
+  ansible.builtin.meta: refresh_inventory
+
+# BEFORE the wait, not after it. A container cannot take a DHCP lease while it is stopped, so
+# starting it after the gate that REQUIRES a lease is an impossible precondition — the role waited
+# ten times for an address that could not arrive, then failed with "it may not have booted".
+# Re-applying to an already-running guest never shows this; a genuinely NEW container always does.
+- name: Ensure container is {{ deployment_proxmox_lxc__desired_state }}
+  community.general.proxmox:
+    api_host: "{{ proxmox.api_host }}"
+    api_user: "{{ proxmox.user }}"
+    api_token_id: "{{ proxmox.api_token_id }}"
+    api_token_secret: "{{ proxmox.api_token_secret }}"
+    vmid: "{{ deployment_proxmox_lxc_container.vmid }}"
+    update: false
+    state: "{{ deployment_proxmox_lxc__desired_state }}"
+
+- name: Wait for the new container to have an address in the inventory
+  # NO delegate_to here: it is not a valid attribute on a TaskInclude and Ansible refuses to parse
+  # the file — this role could not create ANY container. The included tasks carry their own
+  # delegate_to (refresh_until_present.yml), which is where it belongs and where it works.
+  ansible.builtin.include_tasks: refresh_until_present.yml
+  loop: "{{ range(0, (utils_verify_connection_retries | int) + 1) | list }}"
+  loop_control:
+    loop_var: _dpl_attempt
+    label: "attempt {{ _dpl_attempt + 1 }}"
+  when: >-
+    (hostvars[deployment_proxmox_lxc_container.hostname]['ansible_host'] | default('')) in ['', None]
+
+- name: HARD GATE — the container must have an inventory address before we continue
+  ansible.builtin.assert:
+    that:
+      - (hostvars[deployment_proxmox_lxc_container.hostname]['ansible_host'] | default('')) not in ['', None]
+    fail_msg: >-
+      {{ deployment_proxmox_lxc_container.hostname }} still has no ansible_host after
+      {{ utils_verify_connection_retries }} refreshes — it may not have booted or taken a lease.
+    success_msg: "{{ deployment_proxmox_lxc_container.hostname }} is in the inventory with an address."
+    quiet: true
+
+- name: Rerun setup
+  ansible.builtin.setup:

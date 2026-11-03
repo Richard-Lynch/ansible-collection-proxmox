@@ -1,0 +1,53 @@
+---
+- name: "Pass {{ _pass }} — read the live config (GET .../config)"
+  ansible.builtin.command:
+    argv: ["{{ ansible_playbook_python }}", "{{ _model }}", parse, "{{ _dir }}/101.conf"]
+  register: _get
+  changed_when: false
+
+- name: "Pass {{ _pass }} — hand it to the role as its proxmox_vm_info reading"
+  ansible.builtin.set_fact:
+    deployment_proxmox_lxc__current_config: "{{ _get.stdout | from_json }}"
+
+- name: "Pass {{ _pass }} — deployment_proxmox_lxc computes its drift"
+  ansible.builtin.include_role:
+    name: deployment_proxmox_lxc
+    tasks_from: drift.yml
+
+- name: "Pass {{ _pass }} — PUT the drifted keys, as the role's update task would"
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - "{{ _model }}"
+      - put
+      - "{{ _dir }}/101.conf"
+      - "{{ dict(deployment_proxmox_lxc__drift | dict2items | map(attribute='key')
+              | zip(deployment_proxmox_lxc__drift | dict2items | map(attribute='value.desired')))
+            | to_json }}"
+  when: deployment_proxmox_lxc__drift | length > 0
+  changed_when: true
+
+- name: "Pass {{ _pass }} — proxmox_lxc_docker_fix writes its lines"
+  ansible.builtin.include_role:
+    name: proxmox_lxc_docker_fix
+    tasks_from: configure.yml
+  vars:
+    proxmox_lxc_docker_fix_vmid: "101"
+    proxmox_lxc_docker_fix_conf_dir: "{{ _dir }}"
+
+- name: "Pass {{ _pass }} — read the file back"
+  ansible.builtin.slurp:
+    src: "{{ _dir }}/101.conf"
+  register: _after
+
+- name: "Pass {{ _pass }} — record what this pass did"
+  ansible.builtin.set_fact:
+    _existing_results: >-
+      {{ _existing_results | default([]) + [{
+           'pass': _pass,
+           'description_before': deployment_proxmox_lxc__current_config.description | default(''),
+           'drift': deployment_proxmox_lxc__drift.keys() | list | sort,
+           'needs_restart': deployment_proxmox_lxc__drift | richard_lynch.proxmox.dpl_lxc_drift_needs_restart,
+           'docker_fix_changed': proxmox_lxc_docker_fix__changed | bool,
+           'file_after': _after.content | b64decode,
+         }] }}

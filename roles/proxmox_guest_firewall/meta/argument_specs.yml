@@ -1,0 +1,108 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/proxmox_guest_firewall/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate proxmox_guest_firewall
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Report, preview or apply the Proxmox firewall for a set of guests
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      proxmox_guest_firewall_action:
+        description:
+          - 'report: read the datacenter, node and guest firewall state, change nothing.'
+          - 'preview: report, then render the intended cluster.fw and <vmid>.fw files'
+          - and print what would change, change nothing.
+          - 'apply: preview, then write. Needs proxmox_guest_firewall_apply=true too.'
+          - The FIRST apply turns the DATACENTER firewall on, which is CLUSTER-WIDE.
+        type: str
+        required: false
+        default: report
+        choices:
+          - report
+          - preview
+          - apply
+      proxmox_guest_firewall_apply:
+        description:
+          - The second key for action=apply. Without it apply refuses before any
+          - read-back or write.
+        type: bool
+        required: false
+        default: false
+      proxmox_guest_firewall_datacenter_confirm:
+        description:
+          - The THIRD key, for the cluster-wide step only. With apply but without it,
+          - apply writes the guest files and NIC flags (inert while the datacenter is
+          - off) and stops before cluster.fw.
+        type: bool
+        required: false
+        default: false
+      proxmox_guest_firewall_nodes:
+        description:
+          - Every cluster node, as {name, address}. The report reads each node's host
+          - firewall state, and the apply before-check needs 22 and 8006 to answer on
+          - every one of them. Derive it from the inventory.
+        type: list
+        required: true
+        elements: dict
+      proxmox_guest_firewall_cluster_options:
+        description:
+          - The [OPTIONS] of cluster.fw. Proxmox applies guest rules only while the
+          - datacenter has enable=1. The default policies are ACCEPT, so switching it on
+          - does not start filtering node traffic; only guests whose own options say
+          - enable=1 are filtered.
+        type: dict
+        required: false
+        default:
+          enable: 1
+          policy_in: ACCEPT
+          policy_out: ACCEPT
+      proxmox_guest_firewall_ipsets:
+        description:
+          - Cluster IPSets, as name -> list of {cidr, comment}. Rules refer to them as
+          - +<name>. Each entry is a single address or a CIDR, never a hostname.
+        type: dict
+        required: false
+        default: {}
+      proxmox_guest_firewall_guests:
+        description:
+          - 'Each guest whose firewall this role owns:'
+          - '  name, vmid, node, type (lxc|qemu), policy_in, policy_out (ACCEPT|DROP|REJECT)'
+          - '  rules: list of {dir: in|out, action: ACCEPT|DROP|REJECT, proto, dport,'
+          - '         source, dest, comment}. source and dest are a CIDR or +ipset.'
+          - Every rule needs a comment. A rule nobody can justify is a rule nobody dares
+          - remove.
+        type: list
+        required: false
+        default: []
+        elements: dict
+      proxmox_guest_firewall_management_ports:
+        description:
+          - Ports that must answer on every node before AND after an apply. Losing
+          - 8006 or 22 on a node is the failure that turns a firewall change into a
+          - console visit.
+        type: list
+        required: false
+        default:
+          - 22
+          - 8006
+        elements: int
+      proxmox_guest_firewall_fw_dir:
+        description:
+          - Where Proxmox keeps cluster.fw and <vmid>.fw (pmxcfs, cluster-shared).
+          - The molecule scenario points this at a scratch directory.
+        type: str
+        required: false
+        default: /etc/pve/firewall
+      proxmox_guest_firewall_render_only:
+        description:
+          - Skip every read of the live cluster (pvesh, pve-firewall) and only render
+          - and gate. For the molecule scenario, which has no cluster to read.
+        type: bool
+        required: false
+        default: false

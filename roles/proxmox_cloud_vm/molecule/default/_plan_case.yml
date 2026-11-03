@@ -1,0 +1,20 @@
+---
+- name: "Plan {{ _case }}: load the input"
+  ansible.builtin.include_vars:
+    file: "{{ render_root }}/{{ _case }}.json"
+
+- name: "Plan {{ _case }}: the role's own resolver, gates and plan"
+  ansible.builtin.include_role:
+    name: proxmox_cloud_vm
+    tasks_from: "{{ _t }}"
+    public: true
+  loop: [_resolve_defaults, _gates, _plan]
+  loop_control:
+    loop_var: _t
+    label: "{{ _t }}"
+
+- name: "Plan {{ _case }}: record it"
+  ansible.builtin.copy:
+    dest: "{{ render_root }}/plan-{{ _case }}.json"
+    content: "{{ {'argv': _pcv_create_argv, 'desired': _pcv_desired, 'image_path': _pcv_image_path, 'vendor': _pcv_vendor_content} | to_json }}"
+    mode: "0644"

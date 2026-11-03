@@ -1,0 +1,373 @@
+---
+# Builds a patched Intel iHD VA-API driver and installs it ALONGSIDE the bundled one, proving it
+# works before switching anything over.
+#
+# See this role's README.md.
+
+- name: Setup vars
+  ansible.builtin.include_tasks: setup_vars.yml
+
+# --- 1. establish the starting state --------------------------------------------------------------
+- name: Read the current driver and GPU state
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      # The GPU's own render node, via its PCI address — NOT the first node in /dev/dri, which on
+      # a host with an integrated GPU is often the iGPU and would mask a broken discrete card entirely.
+      addr=$(lspci -Dnn 2>/dev/null | grep -iE '\[03(00|02|80)\]:' \
+             | grep -i {{ imd_device_id | quote }} | awk '{print $1}' | head -1)
+      echo "ADDR|${addr:-none}"
+      if [ -n "$addr" ]; then
+        drv=$(lspci -vv -s "$addr" 2>/dev/null | awk -F': ' '/Kernel driver in use/{print $2}')
+        node=$(ls "{{ imd_sysfs_base }}/$addr/drm/" 2>/dev/null | grep '^renderD' | head -1)
+        echo "DRIVER|${drv:-NONE}"
+        echo "NODE|${node:-none}"
+      else
+        echo "DRIVER|NONE"; echo "NODE|none"
+      fi
+      echo "CTSTATE|$(pct status {{ imd_ctid }} 2>/dev/null | awk '{print $2}')"
+      # Is our patched driver already installed, and does the container see the bundled one?
+      echo "BUNDLED|$(pct exec {{ imd_ctid }} -- docker exec {{ imd_container | quote }} \
+        sh -c 'ls {{ imd_driver_dir }}/iHD_drv_video.so 2>/dev/null && echo yes || echo no' 2>/dev/null | tail -1)"
+      echo "PATCHED|$(pct exec {{ imd_ctid }} -- docker exec {{ imd_container | quote }} \
+        sh -c 'ls {{ imd_install_dir }}/iHD_drv_video.so 2>/dev/null && echo yes || echo no' 2>/dev/null | tail -1)"
+  register: _imd_state
+  changed_when: false
+
+- name: HARD GATE — the state read must have produced every marker
+  ansible.builtin.assert:
+    that:
+      - _imd_state.rc == 0
+      - (_imd_state.stdout_lines | select('match', '^ADDR') | list | length) == 1
+      - (_imd_state.stdout_lines | select('match', '^NODE') | list | length) == 1
+      - (_imd_state.stdout_lines | select('match', '^CTSTATE') | list | length) == 1
+    fail_msg: >-
+      Could not read state from {{ inventory_hostname }} (rc={{ _imd_state.rc }}).
+      Got: {{ _imd_state.stdout_lines | default([]) }}
+    quiet: true
+
+- name: Parse the state
+  vars:
+    _g: "{{ _imd_state.stdout_lines }}"
+  ansible.builtin.set_fact:
+    _imd_addr: "{{ (_g | select('match', '^ADDR') | first).split('|')[1] }}"
+    _imd_drv: "{{ (_g | select('match', '^DRIVER') | first).split('|')[1] }}"
+    _imd_node: "{{ (_g | select('match', '^NODE') | first).split('|')[1] }}"
+    _imd_ct: "{{ (_g | select('match', '^CTSTATE') | first).split('|')[1] }}"
+    _imd_has_patched: "{{ (_g | select('match', '^PATCHED') | first).split('|')[1] == 'yes' }}"
+    _imd_bundled_seen: "{{ (_g | select('match', '^BUNDLED') | first).split('|')[1] == 'yes' }}"
+
+- name: HARD GATE — the GPU must be present and claimed by a host driver
+  # Building a userspace driver is pointless while the kernel has not claimed the card. Failing
+  # here points at the real problem instead of producing a driver that still cannot open anything.
+  ansible.builtin.assert:
+    that:
+      - _imd_addr != 'none'
+      - _imd_drv not in ['NONE', 'vfio-pci']
+      - _imd_node != 'none'
+    fail_msg: >-
+      GPU {{ imd_device_id }} is not usable by the host: address={{ _imd_addr }},
+      driver={{ _imd_drv }}, node={{ _imd_node }}.
+      {{ 'It is bound to vfio-pci — free it first (roles/proxmox_gpu_passthrough).'
+         if _imd_drv == 'vfio-pci' else 'No host driver has claimed it.' }}
+    success_msg: "GPU {{ imd_device_id }} at {{ _imd_addr }} on {{ _imd_drv }}, node {{ _imd_node }}."
+    quiet: true
+
+- name: HARD GATE — the container must be reachable and the bundled driver findable
+  # Proves BOTH that pct->docker exec works and that imd_driver_dir is correct. Without it, a
+  # stopped/renamed container or a wrong path yields "no profiles" — indistinguishable from the
+  # driver being broken — and the role would run a 20-minute build before failing confusingly.
+  ansible.builtin.assert:
+    that:
+      - _imd_bundled_seen | bool
+    fail_msg: >-
+      Could not see {{ imd_driver_dir }}/iHD_drv_video.so inside container
+      '{{ imd_container }}' in guest {{ imd_ctid }}. Either the container is not running under
+      that name, or imd_driver_dir is wrong. Refusing to interpret that as "the driver is broken".
+    success_msg: "Container {{ imd_container }} reachable; bundled driver present."
+    quiet: true
+
+- name: HARD GATE — the guest must be running
+  ansible.builtin.assert:
+    that:
+      - _imd_ct == 'running'
+    fail_msg: "Guest {{ imd_ctid }} is '{{ _imd_ct }}' — start it before building/installing."
+    quiet: true
+
+# --- 2. probe the CURRENT driver, to have a real before/after ------------------------------------
+# If a patched driver is already installed, probe THAT first: a rebuild costs 20-30 minutes and is
+# pure waste when the artifact is already present and working. Without this the role rebuilds on
+# every run, because the before-probe targets the bundled driver, which stays broken forever.
+- name: Probe the ALREADY-INSTALLED patched driver, if present
+  ansible.builtin.include_tasks: probe.yml
+  vars:
+    _probe_tag: existing
+    _probe_dir: "{{ imd_install_dir }}"
+  when: _imd_has_patched | bool
+
+- name: Report that a working patched driver is already installed
+  ansible.builtin.debug:
+    msg: >-
+      A patched driver is already installed at {{ imd_install_dir }} and WORKS
+      ({{ _imd_profiles_existing | default([]) | length }} profiles) — nothing to rebuild.
+  when:
+    - _imd_has_patched | bool
+    - _imd_ok_existing | default(false) | bool
+
+- name: Probe VA-API with the BUNDLED driver (before)
+  ansible.builtin.include_tasks: probe.yml
+  vars:
+    _probe_tag: before
+    _probe_dir: "{{ imd_driver_dir }}"
+
+- name: Report the starting state
+  ansible.builtin.debug:
+    msg:
+      - "host:            {{ inventory_hostname }}"
+      - "gpu:             {{ imd_device_id }} at {{ _imd_addr }} ({{ _imd_drv }}, {{ _imd_node }})"
+      - "guest/container: {{ imd_ctid }} / {{ imd_container }}"
+      - "patched driver already installed: {{ _imd_has_patched }}"
+      - "vainfo with bundled driver: {{ _imd_ok_before }}"
+      - "profiles: {{ _imd_profiles_before | default([]) | length }}"
+      - "apply: {{ imd_apply | bool }}"
+
+- name: Report that the bundled driver already works
+  # If the bundled driver is fine, building a patched one is unnecessary risk. Saying so plainly
+  # beats building anyway and calling it success.
+  ansible.builtin.debug:
+    msg: >-
+      The BUNDLED driver already works on {{ _imd_node }}
+      ({{ _imd_profiles_before | length }} profiles) — no patched build needed.
+  when: _imd_ok_before | bool
+
+- name: Report that this is a dry run
+  ansible.builtin.debug:
+    msg: >-
+      DRY RUN — would build iHD from {{ imd_media_driver_ref }} in a throwaway Ubuntu 24.04
+      container, then install it to {{ imd_install_dir }} on the GUEST filesystem (not inside
+      {{ imd_container }}, whose /usr/lib is an ephemeral writable layer). The bundled driver is
+      left untouched, and nothing is wired into the container. Re-run with imd_apply=true.
+  when:
+    - not (imd_apply | bool)
+    - not (_imd_ok_before | bool)
+
+# --- 3. build and install --------------------------------------------------------------------------
+- name: Build and install the patched driver
+  when:
+    - imd_apply | bool
+    - not (_imd_ok_before | bool)
+    - not (_imd_ok_existing | default(false) | bool)
+  block:
+    - name: Create the build context on the guest
+      ansible.builtin.file:
+        path: "{{ imd_build_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: "{{ inventory_hostname }}"
+
+    - name: Push the Dockerfile into the guest
+      # Written to the PVE host then pushed with `pct push`, because the guest is an LXC container
+      # this play does not have a direct Ansible connection to.
+      ansible.builtin.copy:
+        src: Dockerfile.iHD
+        dest: "{{ imd_build_dir }}/Dockerfile.iHD"
+        mode: "0644"
+
+    - name: Create the build and staging dirs INSIDE the guest
+      # `pct push` does NOT create parent directories — it fails with "unable to open file". The
+      # host-side dir created above is a different filesystem entirely.
+      ansible.builtin.command:
+        cmd: "pct exec {{ imd_ctid }} -- mkdir -p {{ imd_guest_build_dir }} {{ imd_install_dir }}"
+      register: _imd_guestdirs
+      changed_when: _imd_guestdirs.rc == 0
+
+    - name: Copy the build context into the guest
+      ansible.builtin.command:
+        cmd: >-
+          pct push {{ imd_ctid }} {{ imd_build_dir }}/Dockerfile.iHD
+          {{ imd_guest_build_dir }}/Dockerfile.iHD --perms 644
+      register: _imd_push
+      changed_when: _imd_push.rc == 0
+
+    - name: Build the driver in a throwaway container
+      # The build is long (10-30 min). It happens INSIDE the guest's docker, matching the upstream
+      # jellyfin image's Ubuntu 24.04 userspace — a Debian-bookworm build would link against the wrong
+      # libstdc++ and fail at load time rather than at build time.
+      ansible.builtin.command:
+        cmd: >-
+          pct exec {{ imd_ctid }} -- docker build
+          --build-arg MEDIA_DRIVER_REF={{ imd_media_driver_ref }}
+          --build-arg GMMLIB_REF={{ imd_gmmlib_ref }}
+          --build-arg LIBVA_REF={{ imd_libva_ref }}
+          -f {{ imd_guest_build_dir }}/Dockerfile.iHD
+          -t {{ imd_image_tag }}
+          {{ imd_guest_build_dir }}
+      register: _imd_build
+      changed_when: true
+      timeout: "{{ imd_build_timeout | int }}"
+
+    - name: Extract the built driver and its provenance
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -o pipefail
+          # `docker create` on a scratch image gives a container we can copy out of without running
+          # anything — the image has no shell by design.
+          # An explicit command argument as well as the image's CMD: `docker create` refuses an
+          # image with no command at all, and belt-and-braces here costs nothing. The container is
+          # never started, so the argument is never executed.
+          cid=$(pct exec {{ imd_ctid }} -- docker create {{ imd_image_tag }} /nonexistent 2>/dev/null)
+          [ -n "$cid" ] || { echo "CREATEFAIL"; }
+          pct exec {{ imd_ctid }} -- mkdir -p {{ imd_guest_stage_dir }}
+          # REQUIRED files: their absence is a real failure.
+          for f in iHD_drv_video.so iHD_drv_video.so.sha256 BUILD_ldd.txt \
+                   BUILD_media-driver.sha BUILD_gmmlib.sha BUILD_libva.sha; do
+            pct exec {{ imd_ctid }} -- docker cp "$cid:/$f" "{{ imd_guest_stage_dir }}/$f" 2>/dev/null \
+              || echo "COPYFAIL|$f"
+          done
+          # gmmlib: copy the WHOLE directory and pick out whatever libigdgmm.* the build produced.
+          # Hardcoding a version-suffixed filename (libigdgmm.so.12.x.y) would break whenever
+          # the built version differs. Globbing the extracted directory asks the artifact
+          # what it contains instead of asserting what it should contain.
+          pct exec {{ imd_ctid }} -- sh -c \
+            "docker cp $cid:/. {{ imd_guest_stage_dir }}.all 2>/dev/null && \
+             cp -a {{ imd_guest_stage_dir }}.all/libigdgmm.so* {{ imd_guest_stage_dir }}/ 2>/dev/null; \
+             rm -rf {{ imd_guest_stage_dir }}.all" 2>/dev/null || true
+          echo "GMMLIB|$(pct exec {{ imd_ctid }} -- sh -c 'ls {{ imd_guest_stage_dir }}/libigdgmm.so* 2>/dev/null | tr "\n" " "')"
+          pct exec {{ imd_ctid }} -- docker rm "$cid" >/dev/null 2>&1 || true
+          echo "SHA|$(pct exec {{ imd_ctid }} -- cat {{ imd_guest_stage_dir }}/BUILD_media-driver.sha 2>/dev/null)"
+          echo "SIZE|$(pct exec {{ imd_ctid }} -- stat -c %s {{ imd_guest_stage_dir }}/iHD_drv_video.so 2>/dev/null)"
+      register: _imd_extract
+      changed_when: true
+
+    - name: HARD GATE — the artifact must have been extracted, and be the right commit
+      # Checks the built commit matches what was requested. A build from the wrong ref would
+      # produce a driver without the fix that looks entirely successful until it crashes.
+      vars:
+        _sha: "{{ (_imd_extract.stdout_lines | select('match', '^SHA') | first | default('SHA|')).split('|')[1] | trim }}"
+        _size: "{{ (_imd_extract.stdout_lines | select('match', '^SIZE') | first | default('SIZE|0')).split('|')[1] | int }}"
+      ansible.builtin.assert:
+        that:
+          - "'COPYFAIL' not in (_imd_extract.stdout | default(''))"
+          - "'CREATEFAIL' not in (_imd_extract.stdout | default(''))"
+          - _size | int > 1000000
+          - _sha | length >= 7
+          - _sha.startswith(imd_media_driver_ref) or imd_media_driver_ref.startswith(_sha[:7]) or imd_media_driver_ref == 'master'
+        fail_msg: >-
+          Artifact extraction failed or built the wrong ref.
+          built sha={{ _sha }}, requested={{ imd_media_driver_ref }}, size={{ _size }} bytes.
+          Output: {{ _imd_extract.stdout_lines | default([]) }}
+        success_msg: "Built iHD from {{ _sha }} ({{ _size }} bytes)."
+        quiet: true
+
+    - name: Install the driver onto the GUEST filesystem, not into the container
+      # THE CRITICAL PLACEMENT DECISION.
+      #
+      # The obvious approach — `docker cp` into /usr/lib/jellyfin-ffmpeg/lib/dri-patched inside the
+      # running container — is WRONG, and dangerously so. The jellyfin image mounts
+      # only its configured volumes, so that path lives in the container's WRITABLE LAYER. Using
+      # the driver requires setting LIBVA_DRIVERS_PATH, which requires editing compose and
+      # RECREATING the container — which discards the writable layer and deletes the driver. The
+      # container then starts with LIBVA_DRIVERS_PATH pointing at a directory that no longer exists,
+      # and because that variable REPLACES libva's search path, even the untouched bundled driver is
+      # no longer found. Following those instructions would leave transcoding WORSE than before.
+      #
+      # So the artifact lives on the guest filesystem and is bind-mounted in. Install and enable
+      # then become one atomic compose change, and it survives every container recreate.
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -o pipefail
+          pct exec {{ imd_ctid }} -- mkdir -p {{ imd_install_dir }}
+          for f in iHD_drv_video.so iHD_drv_video.so.sha256 BUILD_ldd.txt \
+                   BUILD_media-driver.sha BUILD_gmmlib.sha BUILD_libva.sha; do
+            pct exec {{ imd_ctid }} -- cp -a "{{ imd_guest_stage_dir }}/$f" "{{ imd_install_dir }}/$f" \
+              2>/dev/null || echo "INSTALLMISS|$f"
+          done
+          # gmmlib — the driver links it dynamically and must not fall back to the container's
+          # older bundled copy.
+          #
+          # Resolved to a REAL FILE at a STABLE name, not left as the symlink chain the build
+          # produced (libigdgmm.so.12 -> libigdgmm.so.12.10.0). Docker does follow a symlink at
+          # mount time, so the chain happens to work — but the compose file would then depend on a
+          # version-suffixed filename that changes whenever gmmlib is bumped, silently breaking the
+          # mount on the next rebuild. `cp -L` dereferences once, here, so compose can reference one
+          # fixed path forever.
+          pct exec {{ imd_ctid }} -- sh -c \
+            'src=$(ls {{ imd_guest_stage_dir }}/libigdgmm.so.*.* 2>/dev/null | head -1); \
+             [ -n "$src" ] && cp -L "$src" {{ imd_install_dir }}/libigdgmm.so.12 || true'
+          # Verify the copy, using the checksum the build recorded — two hops have happened since.
+          pct exec {{ imd_ctid }} -- sh -c \
+            'cd {{ imd_install_dir }} && sed "s|/out/|./|" iHD_drv_video.so.sha256 | sha256sum -c -' \
+            2>&1 | tail -1
+          # Both files must be real, non-empty regular files: if either is missing when compose
+          # starts, docker silently creates an empty DIRECTORY at the mount target and Jellyfin
+          # loses VA-API entirely.
+          pct exec {{ imd_ctid }} -- test -s {{ imd_install_dir }}/libigdgmm.so.12 \
+            || echo "GMMLIB_MISSING"
+          echo "INSTALLED|$(pct exec {{ imd_ctid }} -- stat -c %s {{ imd_install_dir }}/iHD_drv_video.so 2>/dev/null)"
+      register: _imd_install
+      changed_when: true
+
+    - name: HARD GATE — the installed driver must match the built checksum
+      # Two `docker cp`/`cp` hops separate the build from the install. A truncated or partial copy
+      # would produce a driver that fails to load in a way that looks like the fix not working.
+      ansible.builtin.assert:
+        that:
+          - "'INSTALLMISS' not in (_imd_install.stdout | default(''))"
+          - "'GMMLIB_MISSING' not in (_imd_install.stdout | default(''))"
+          - "'OK' in (_imd_install.stdout | default(''))"
+        fail_msg: >-
+          Install verification failed: {{ _imd_install.stdout_lines | default([]) }}
+        success_msg: "Driver installed and checksum verified in {{ imd_install_dir }}."
+        quiet: true
+
+    # --- 4. the test that decides everything ------------------------------------------------------
+    - name: Probe VA-API with the PATCHED driver (after)
+      ansible.builtin.include_tasks: probe.yml
+      vars:
+        _probe_tag: after
+        _probe_dir: "{{ imd_install_dir }}"
+
+    - name: Report the before/after
+      ansible.builtin.debug:
+        msg:
+          - "bundled driver:  vainfo ok={{ _imd_ok_before }}, profiles={{ _imd_profiles_before | default([]) | length }}"
+          - "patched driver:  vainfo ok={{ _imd_ok_after }}, profiles={{ _imd_profiles_after | default([]) | length }}"
+
+    - name: HARD GATE — the patched driver must actually work
+      # The deliverable is a GPU that transcodes, not a driver that compiled. Without this gate the
+      # role could report success while vainfo still SIGBUSes — a build that compiled is not
+      # a driver that works.
+      ansible.builtin.assert:
+        that:
+          - _imd_ok_after | bool
+          - (_imd_profiles_after | default([])) | length > 0
+        fail_msg: >-
+          The patched driver still does not work on {{ _imd_node }}.
+          vainfo output: {{ _imd_raw_after | default('(none)') | trim | truncate(400) }}
+          The bundled driver is UNTOUCHED, so nothing has regressed.
+          ROLLBACK: remove {{ imd_install_dir }} from guest {{ imd_ctid }}; nothing else changed.
+        success_msg: >-
+          Patched driver WORKS: {{ _imd_profiles_after | length }} profiles on {{ _imd_node }}.
+        quiet: true
+
+    - name: Prove the codecs actually ENCODE, not merely enumerate
+      # vainfo listing a profile is a weaker statement than the engine doing the work. Given the
+      # bug being fixed was a crash during buffer allocation, an actual encode is the honest test.
+      ansible.builtin.include_tasks: transcode_test.yml
+
+    - name: Report the codecs that actually matter
+      # The question that matters: can it do the codecs older integrated GPUs cannot?
+      ansible.builtin.debug:
+        msg:
+          - "HEVC Main10 (10-bit): {{ 'YES' if (_imd_profiles_after | select('search', 'HEVCMain10') | list | length > 0) else 'no' }}"
+          - "AV1:                  {{ 'YES' if (_imd_profiles_after | select('search', 'AV1') | list | length > 0) else 'no' }}"
+          - "H.264:                {{ 'YES' if (_imd_profiles_after | select('search', 'H264') | list | length > 0) else 'no' }}"
+          - ""
+          - "The driver is installed at {{ imd_install_dir }} but NOT yet in use by Jellyfin."
+          - "To use it, set in the jellyfin container's environment:"
+          - "  LIBVA_DRIVERS_PATH={{ imd_install_dir }}"
+          - "ROLLBACK: remove the compose bind mount + env var and recreate the container, then:"
+          - "  remove {{ imd_install_dir }} from guest {{ imd_ctid }}."

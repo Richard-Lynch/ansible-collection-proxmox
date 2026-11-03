@@ -1,0 +1,28 @@
+---
+# Workaround for Docker in unprivileged LXC on PVE 8.x (lxc-pve < 6.0.5)
+# See: https://forum.proxmox.com/threads/175437/
+# Remove this role once upgraded to PVE 9.x or lxc-pve >= 6.0.5-2
+- name: Resolve declared options over their generated defaults
+  ansible.builtin.include_tasks: _resolve_defaults.yml
+
+- name: Write the AppArmor settings into the container config
+  ansible.builtin.include_tasks: configure.yml
+
+- name: Reboot container to apply AppArmor change
+  # noqa: no-handler — deliberately INLINE, not a handler. A handler runs at play end, but the
+  # very next task waits for this container's SSH to come back and everything after it assumes
+  # the new AppArmor profile is live. Deferring the reboot would have those run against the old
+  # config and report success.
+  ansible.builtin.command: "pct reboot {{ proxmox_lxc_docker_fix_vmid }}"
+  when: proxmox_lxc_docker_fix__changed | bool
+  changed_when: true
+
+- name: Wait for container to come back up
+  ansible.builtin.wait_for:
+    host: "{{ hostvars[proxmox_lxc_docker_fix_hostname].ansible_host }}"
+    port: 22
+    delay: 5
+    timeout: 60
+  when:
+    - proxmox_lxc_docker_fix__changed | bool
+    - proxmox_lxc_docker_fix_hostname | default('') | length > 0

@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  namespace: richard_lynch
+  author: Richard Lynch
+  description: >-
+    Create and start a Home Assistant OS VM on a Proxmox VE node: download and decompress the qcow2
+    image and import it as the boot disk of a q35/OVMF VM with a VLAN-tagged NIC and optional USB
+    passthrough.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  galaxy_tags: [proxmox, vm, homeassistant]
+dependencies: []

@@ -1,0 +1,158 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/proxmox_cloud_vm/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate proxmox_cloud_vm
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Create or converge one cloud-init Proxmox VM from a checksummed image
+    description:
+      - Runs ON the Proxmox node (qm and pvesh are local), so it needs no API token in the
+      - play. Downloads the cloud image once, verified against a pinned sha256; creates the
+      - VM only when its vmid is absent; on an existing VM converges memory, balloon, cores,
+      - tags, startup and description, and only GROWS the disk. It starts a stopped VM and
+      - never restarts a running one (the older deployment_proxmox_vm restarted a running VM
+      - on every converge). Refuses a vmid that exists on another node or under another name.
+      - Which node, vmid, VLAN, sizes and key are site configuration and come from
+      - inventory; the role knows how, not which. Cloud-init settings (user, key, address)
+      - apply when the VM is created; changing them later is a deliberate rebuild, not a
+      - converge.
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      proxmox_cloud_vm_node:
+        description:
+          - Proxmox node name the VM lives on (pvesh /nodes/<name>).
+        type: str
+        required: true
+      proxmox_cloud_vm_vmid:
+        description:
+          - The VM's id. An existing VM with this id and another name is refused.
+        type: int
+        required: true
+      proxmox_cloud_vm_name:
+        description:
+          - VM name; it is also the guest's hostname.
+        type: str
+        required: true
+      proxmox_cloud_vm_cores:
+        description:
+          - vCPU count.
+        type: int
+        required: true
+      proxmox_cloud_vm_memory_mb:
+        description:
+          - Memory ceiling in MB.
+        type: int
+        required: true
+      proxmox_cloud_vm_balloon_mb:
+        description:
+          - 'Balloon floor in MB: the host may reclaim memory down to this when it is'
+          - under pressure. 0 disables ballooning (the VM always holds its ceiling).
+        type: int
+        required: false
+        default: 0
+      proxmox_cloud_vm_disk_gb:
+        description:
+          - Root disk size in GB. Grown to this when smaller; never shrunk.
+        type: int
+        required: true
+      proxmox_cloud_vm_storage:
+        description:
+          - Storage for the disk and the cloud-init drive.
+        type: str
+        required: false
+        default: local-lvm
+      proxmox_cloud_vm_bridge:
+        description:
+          - Bridge the NIC attaches to.
+        type: str
+        required: false
+        default: vmbr0
+      proxmox_cloud_vm_vlan_tag:
+        description:
+          - 'VLAN tag on the NIC. Required: an untagged guest lands on the wrong network.'
+        type: int
+        required: true
+      proxmox_cloud_vm_tags:
+        description:
+          - Proxmox tags.
+        type: list
+        required: false
+        default:
+          - ansible
+        elements: str
+      proxmox_cloud_vm_description:
+        description:
+          - Free-text description shown in the UI.
+        type: str
+        required: false
+        default: ''
+      proxmox_cloud_vm_onboot:
+        description:
+          - Start the VM when the node boots.
+        type: bool
+        required: false
+        default: true
+      proxmox_cloud_vm_startup_order:
+        description:
+          - Boot order among guests; 0 sets no ordering.
+        type: int
+        required: false
+        default: 0
+      proxmox_cloud_vm_ci_user:
+        description:
+          - Cloud-init login user. Gets passwordless sudo from the image.
+        type: str
+        required: false
+        default: ubuntu
+      proxmox_cloud_vm_ssh_public_key:
+        description:
+          - Public key cloud-init installs for the login user. No password is set.
+        type: str
+        required: true
+      proxmox_cloud_vm_image:
+        description:
+          - 'The cloud image. Keys: url (https) and sha256 (64 hex). Pin a dated release'
+          - directory, never a moving alias, so the checksum stays true.
+        type: dict
+        required: true
+      proxmox_cloud_vm_image_dir:
+        description:
+          - Directory on the node the image is downloaded into.
+        type: str
+        required: false
+        default: /var/lib/vz/template/iso
+      proxmox_cloud_vm_snippet_storage:
+        description:
+          - Storage whose content types include snippets, where the cloud-init
+          - vendor-data file is written. The Ubuntu cloud image ships WITHOUT
+          - qemu-guest-agent, so without vendor-data that installs it the agent
+          - wait below can never succeed.
+        type: str
+        required: false
+        default: local
+      proxmox_cloud_vm_snippet_enable:
+        description:
+          - Add 'snippets' to the snippet storage's content types when it lacks them
+          - (additive; existing types are kept). Off by default because it edits
+          - cluster-wide storage configuration; when off and missing, the role refuses.
+        type: bool
+        required: false
+        default: false
+      proxmox_cloud_vm_snippet_dir:
+        description:
+          - Directory on the node that snippet_storage serves as 'snippets'.
+        type: str
+        required: false
+        default: /var/lib/vz/snippets
+      proxmox_cloud_vm_agent_wait_seconds:
+        description:
+          - How long to wait for the QEMU guest agent to answer after start.
+        type: int
+        required: false
+        default: 300

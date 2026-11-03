@@ -1,0 +1,26 @@
+---
+- name: Resolve declared options over their generated defaults
+  # GENERATED from meta/argument_specs.py — binds every declared option to its default, so a
+  # default can never be declared-but-dead (the variable evaluating Undefined at run time).
+  ansible.builtin.include_tasks: _resolve_defaults.yml
+
+- name: Download the template {{ proxmox_template_lxc_name }}
+  community.general.proxmox_template:
+    api_host: "{{ proxmox.api_host }}"
+    api_user: "{{ proxmox.user }}"
+    api_token_id: "{{ proxmox.api_token_id }}"
+    api_token_secret: "{{ proxmox.api_token_secret }}"
+    node: "{{ proxmox.node }}"
+    template: "{{ proxmox_template_lxc_name }}"
+    storage: "{{ proxmox_template_lxc_storage }}"
+    content_type: vztmpl
+    timeout: 120
+    state: present
+  register: proxmox_template_lxc__download_result
+
+- name: Verify template {{ proxmox_template_lxc_name }} is available
+  ansible.builtin.command: >
+    pvesm list {{ proxmox_template_lxc_storage }} --content vztmpl
+  register: proxmox_template_lxc__verify_result
+  changed_when: false
+  failed_when: proxmox_template_lxc_name not in proxmox_template_lxc__verify_result.stdout

@@ -1,0 +1,90 @@
+---
+- name: Resolve declared options over their generated defaults
+  ansible.builtin.include_tasks: _resolve_defaults.yml
+
+- name: Set Vars
+  ansible.builtin.include_tasks: set_vars.yml
+
+# TODO stop using download ISO break into multiple pieces
+- name: Download ISO
+  ansible.builtin.include_role:
+    name: richard_lynch.proxmox.proxmox_iso_download
+  vars:
+    proxmox_iso_url: "{{ homeassistant_vm_iso_url }}"
+
+- name: Store location of ISO
+  ansible.builtin.set_fact:
+    homeassistant_vm_iso_path: "{{  proxmox_iso_download_path | regex_replace('\\.xz$', '') }}"
+    homeassistant_vm_iso: "{{ proxmox_iso | regex_replace('\\.xz$', '') }}"
+
+- name: Uncompress qcow2.xz image
+  ansible.builtin.command: >
+    unxz -f {{ proxmox_iso_download_path }}
+  args:
+    creates: "{{ homeassistant_vm_iso_path }}"
+
+- name: Create Home Assistant VM
+  community.general.proxmox_kvm:
+    api_host: "{{ proxmox.api_host }}"
+    # Requires root to pass an arbitrary file
+    api_user: "{{ proxmox.user }}"
+    api_password: "{{ proxmox.password }}"
+    node: "{{ proxmox.node }}"
+
+    state: present
+    tags:
+      - ansible
+      - homeassistant
+
+    vmid: "{{ homeassistant_vm_id }}"
+    name: "{{ homeassistant_vm_name }}"
+
+    # Run this VM on boot
+    onboot: true
+    # Enable the guest agent
+    agent: enabled=1
+
+    machine: q35
+    # machine: i440fx
+    bios: ovmf
+    ostype: l26
+    sockets: 1
+    cpu: host # new
+    cores: "{{ homeassistant_vm_cores }}"
+    memory: "{{ homeassistant_vm_memory }}"
+
+    boot: "order=scsi0"
+    startup: "order={{ homeassistant_vm_startup_order | default(homeassistant_vm_vlan.id) }}"
+    bootdisk: scsi0
+
+    # Actual boot disk
+    scsihw: "virtio-scsi-single"
+    scsi:
+      scsi0: "{{ homeassistant_vm_storage }}:0,iothread=1,discard=on,import-from={{ homeassistant_vm_iso_path }},format=qcow2"
+
+    efidisk0:
+      storage: "{{ homeassistant_vm_storage }}"
+      format: raw
+      efitype: 4m
+      pre_enrolled_keys: 0
+
+    net:
+      # net0: virtio,bridge={{ homeassistant_vm_bridge }}
+      # TODO add to appropriate VLAN
+      net0: virtio,bridge={{ homeassistant_vm_bridge }},tag={{ homeassistant_vm_vlan.id }}
+
+    # https://docs.ansible.com/ansible/latest/collections/community/general/proxmox_kvm_module.html#parameter-usb
+    usb: "{{ homeassistant_vm_usb_serialised | default(omit) }}"
+    tablet: false
+
+- name: Create Home Assistant VM
+  community.general.proxmox_kvm:
+    api_user: "{{ proxmox.user }}"
+    api_host: "{{ proxmox.api_host }}"
+    api_password: "{{ proxmox.password }}"
+    node: "{{ proxmox.node }}"
+
+    vmid: "{{ homeassistant_vm_id }}"
+
+    timeout: 300
+    state: started

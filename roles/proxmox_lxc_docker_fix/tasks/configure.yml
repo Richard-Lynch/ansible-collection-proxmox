@@ -1,0 +1,51 @@
+---
+# The config-file half of the fix, with no reboot: pure file edits, so molecule runs THIS file
+# against a fixture config rather than a copy of it (MOLMIRROR-01).
+#
+# WHY lineinfile AND NOT blockinfile. PVE parses EVERY `#` line of a container config into the
+# container's DESCRIPTION, wherever it sits in the file. `blockinfile` markers
+# (`# BEGIN/END DOCKER APPARMOR WORKAROUND`) are therefore not markers at all: they become
+# description text, the next config PUT from deployment_proxmox_lxc replaces the description and
+# drops them, and a role that finds no markers inserts the block AGAIN, adding a second copy of
+# both lxc.* lines and rebooting the guest — one duplicate pair per converge. Exact-line matching
+# needs no marker, so there is nothing for PVE to absorb, and an existing line (or a duplicate of
+# it) is left alone.
+#
+# The lxc.* keys are owned HERE and only here. They cannot be set through the PVE API at all
+# (raw lxc.* keys are file-only), and PVE preserves them verbatim across every API config write,
+# so deployment_proxmox_lxc never needs to know about them.
+
+- name: Set AppArmor to unconfined for Docker in unprivileged LXC
+  ansible.builtin.lineinfile:
+    path: "{{ proxmox_lxc_docker_fix_conf_dir }}/{{ proxmox_lxc_docker_fix_vmid }}.conf"
+    regexp: '^lxc\.apparmor\.profile\s*[:=]'
+    line: "lxc.apparmor.profile: unconfined"
+    # Before the first `[section]` (a snapshot or pending block): appended after one, the line
+    # would configure the SNAPSHOT, not the running container. No section: end of file.
+    insertbefore: '^\['
+    firstmatch: true
+  register: proxmox_lxc_docker_fix__profile
+
+- name: Hide AppArmor from Docker inside the container
+  ansible.builtin.lineinfile:
+    path: "{{ proxmox_lxc_docker_fix_conf_dir }}/{{ proxmox_lxc_docker_fix_vmid }}.conf"
+    regexp: '^lxc\.mount\.entry\s*[:=]\s*/dev/null\s+sys/module/apparmor/parameters/enabled\s'
+    line: "lxc.mount.entry: /dev/null sys/module/apparmor/parameters/enabled none bind 0 0"
+    insertbefore: '^\['
+    firstmatch: true
+  register: proxmox_lxc_docker_fix__mount
+
+- name: Drop the legacy blockinfile markers
+  # They live in the DESCRIPTION now (see above) and mean nothing. Removing them changes only
+  # the description, which needs no reboot, so this is deliberately NOT part of the reboot
+  # condition. On a guest deployment_proxmox_lxc manages, its own description update has usually
+  # removed them already and this is a no-op.
+  ansible.builtin.lineinfile:
+    path: "{{ proxmox_lxc_docker_fix_conf_dir }}/{{ proxmox_lxc_docker_fix_vmid }}.conf"
+    regexp: '^#\s*(BEGIN|END) DOCKER APPARMOR WORKAROUND\s*$'
+    state: absent
+
+- name: Record whether the running container's AppArmor settings changed
+  ansible.builtin.set_fact:
+    proxmox_lxc_docker_fix__changed: >-
+      {{ (proxmox_lxc_docker_fix__profile is changed) or (proxmox_lxc_docker_fix__mount is changed) }}

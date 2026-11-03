@@ -1,0 +1,183 @@
+---
+# READ-ONLY. Every command is a GET or a status print; nothing here writes. Runs on ONE node: the
+# firewall config lives on pmxcfs (cluster-shared) and pvesh proxies /nodes/<n>/... to each node.
+- name: Read the datacenter firewall options
+  ansible.builtin.command:
+    argv: [pvesh, get, /cluster/firewall/options, --output-format, json]
+  register: _pgf_dc
+  changed_when: false
+  check_mode: false
+
+- name: Read the datacenter IPSets
+  ansible.builtin.command:
+    argv: [pvesh, get, /cluster/firewall/ipset, --output-format, json]
+  register: _pgf_dc_ipsets
+  changed_when: false
+  check_mode: false
+
+- name: Read the datacenter rules
+  ansible.builtin.command:
+    argv: [pvesh, get, /cluster/firewall/rules, --output-format, json]
+  register: _pgf_dc_rules
+  changed_when: false
+  check_mode: false
+
+- name: Read local_network as pve-firewall resolves it on this node
+  ansible.builtin.command:
+    argv: [pve-firewall, localnet]
+  register: _pgf_localnet
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Read whether the quorum holds
+  ansible.builtin.command:
+    argv: [pvecm, status]
+  register: _pgf_pvecm
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Read each node's host firewall options
+  ansible.builtin.command:
+    argv: [pvesh, get, "/nodes/{{ item.name }}/firewall/options", --output-format, json]
+  register: _pgf_node_opts
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  loop: "{{ proxmox_guest_firewall_nodes }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Read each node's management ports from the controller
+  ansible.builtin.wait_for:
+    host: "{{ item.0.address }}"
+    port: "{{ item.1 }}"
+    timeout: 5
+  delegate_to: localhost
+  register: _pgf_node_ports
+  # ignore_errors, NOT failed_when: false. failed_when: false forces .failed to False even on a
+  # timeout (wait_for against a closed port included), so every port would read
+  # 'open' and apply's BEFORE gate on 'CLOSED' could never fire.
+  ignore_errors: true
+  loop: "{{ proxmox_guest_firewall_nodes | product(proxmox_guest_firewall_management_ports) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}:{{ item.1 }}"
+
+- name: Read where every declared guest actually lives (node, type)
+  ansible.builtin.command:
+    argv: [pvesh, get, /cluster/resources, --type, vm, --output-format, json]
+  register: _pgf_resources
+  changed_when: false
+  check_mode: false
+
+- name: Read each guest's firewall options
+  ansible.builtin.command:
+    argv: [pvesh, get, "/nodes/{{ item.node }}/{{ item.type }}/{{ item.vmid }}/firewall/options", --output-format, json]
+  register: _pgf_guest_opts
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  loop: "{{ proxmox_guest_firewall_guests }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Read each guest's firewall rules
+  ansible.builtin.command:
+    argv: [pvesh, get, "/nodes/{{ item.node }}/{{ item.type }}/{{ item.vmid }}/firewall/rules", --output-format, json]
+  register: _pgf_guest_rules
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  loop: "{{ proxmox_guest_firewall_guests }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Read each guest's config (is firewall=1 on its NICs?)
+  ansible.builtin.command:
+    argv: [pvesh, get, "/nodes/{{ item.node }}/{{ item.type }}/{{ item.vmid }}/config", --output-format, json]
+  register: _pgf_guest_conf
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  loop: "{{ proxmox_guest_firewall_guests }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Summarise the live state
+  ansible.builtin.set_fact:
+    proxmox_guest_firewall_live:
+      datacenter: "{{ _pgf_dc.stdout | from_json }}"
+      datacenter_enabled: "{{ ((_pgf_dc.stdout | from_json).enable | default(0) | int) == 1 }}"
+      datacenter_ipsets: "{{ _pgf_dc_ipsets.stdout | from_json | map(attribute='name') | list }}"
+      datacenter_rule_count: "{{ _pgf_dc_rules.stdout | from_json | length }}"
+      local_network: "{{ _pgf_localnet.stdout_lines | select('search', '(?i)local_network|network auto detect') | list }}"
+      quorate: "{{ _pgf_pvecm.stdout is search('(?m)^Quorate:\\s+Yes') }}"
+      nodes: >-
+        {{ _pgf_node_opts.results | map(attribute='item.name')
+           | zip(_pgf_node_opts.results | map(attribute='stdout') | map('default', '')
+                 | map('trim') | map('regex_replace', '^$', '{"error":"no answer"}') | map('from_json'))
+           | community.general.dict }}
+      node_ports: >-
+        {{ _pgf_node_ports.results | map(attribute='item') | map(attribute='0') | map(attribute='name') | zip(_pgf_node_ports.results | map(attribute='item') | map(attribute='1') | map('string')) | map('join', ':')
+           | zip(_pgf_node_ports.results | map(attribute='failed') | map('ternary', 'CLOSED', 'open'))
+           | community.general.dict }}
+      guests: >-
+        {{ _pgf_guest_opts.results | map(attribute='item.name')
+           | zip(_pgf_guest_opts.results | map(attribute='stdout') | map('default', '')
+                 | map('trim') | map('regex_replace', '^$', '{"error":"no answer"}') | map('from_json'))
+           | community.general.dict }}
+      guest_rule_counts: >-
+        {{ _pgf_guest_rules.results | map(attribute='item.name')
+           | zip(_pgf_guest_rules.results | map(attribute='stdout') | map('default', '[]')
+                 | map('trim') | map('regex_replace', '^$', '[]') | map('from_json') | map('length'))
+           | community.general.dict }}
+
+- name: Summarise each guest's NICs (the firewall flag per netN)
+  ansible.builtin.set_fact:
+    _pgf_guest_nics: >-
+      {{ _pgf_guest_nics | default({}) | combine({item.item.name:
+           ((item.stdout | default('') | trim) or '{}') | from_json | dict2items
+           | selectattr('key', 'match', 'net[0-9]+$') | items2dict}) }}
+  loop: "{{ _pgf_guest_conf.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Record the NIC summary with the live state
+  ansible.builtin.set_fact:
+    proxmox_guest_firewall_live: "{{ proxmox_guest_firewall_live | combine({'guest_nics': _pgf_guest_nics | default({})}) }}"
+
+# A guest whose declared node/type disagrees with the cluster would be read and written at the
+# wrong API path; pvesh would then answer 404/500 and the preview would show "no answer".
+- name: HARD GATE - every declared guest exists where the declaration says
+  ansible.builtin.assert:
+    that:
+      - >-
+        (_pgf_resources.stdout | from_json
+         | selectattr('vmid', 'equalto', item.vmid | int)
+         | selectattr('node', 'equalto', item.node)
+         | selectattr('type', 'equalto', item.type) | list | length) == 1
+    fail_msg: >-
+      {{ item.name }} is declared as {{ item.type }} {{ item.vmid }} on {{ item.node }}, but the
+      cluster says
+      {{ _pgf_resources.stdout | from_json | selectattr('vmid', 'equalto', item.vmid | int)
+         | map(attribute='type') | list }} on
+      {{ _pgf_resources.stdout | from_json | selectattr('vmid', 'equalto', item.vmid | int)
+         | map(attribute='node') | list }}.
+    quiet: true
+  loop: "{{ proxmox_guest_firewall_guests }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Report the live firewall state
+  ansible.builtin.debug:
+    msg:
+      - "DATACENTER firewall enabled: {{ proxmox_guest_firewall_live.datacenter_enabled }} (options {{ proxmox_guest_firewall_live.datacenter }})"
+      - "datacenter IPSets: {{ proxmox_guest_firewall_live.datacenter_ipsets }}; datacenter rules: {{ proxmox_guest_firewall_live.datacenter_rule_count }}"
+      - "local_network: {{ proxmox_guest_firewall_live.local_network }}"
+      - "quorate: {{ proxmox_guest_firewall_live.quorate }}"
+      - "node host firewall options: {{ proxmox_guest_firewall_live.nodes }}"
+      - "node management ports from the controller: {{ proxmox_guest_firewall_live.node_ports }}"
+      - "guest firewall options: {{ proxmox_guest_firewall_live.guests }}"
+      - "guest rule counts: {{ proxmox_guest_firewall_live.guest_rule_counts }}"
+      - "guest NICs: {{ proxmox_guest_firewall_live.guest_nics }}"

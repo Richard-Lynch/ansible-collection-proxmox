@@ -1,0 +1,33 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/proxmox_lxc_docker_fix/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate proxmox_lxc_docker_fix
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Let Docker run in an unprivileged LXC on PVE 8.x (AppArmor workaround)
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      proxmox_lxc_docker_fix_vmid:
+        description: The container whose config gets the lxc.* AppArmor lines.
+        type: str
+        required: true
+      proxmox_lxc_docker_fix_hostname:
+        description:
+          - Inventory name of the container. When set, the role waits for its SSH
+          - after a reboot; when empty, it does not wait.
+        type: str
+        required: false
+        default: ''
+      proxmox_lxc_docker_fix_conf_dir:
+        description:
+          - Directory holding <vmid>.conf. PVE's own path on every node; only a
+          - test points it elsewhere.
+        type: str
+        required: false
+        default: /etc/pve/lxc

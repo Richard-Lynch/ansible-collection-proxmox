@@ -1,0 +1,37 @@
+---
+# AUTO-GENERATED defaults file — DO NOT EDIT.
+#
+# Source of truth: roles/intel_gpu_vaapi/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate intel_gpu_vaapi
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+# Entrypoint:      main
+
+# false (default) probes and reports what it would install, changing nothing.
+# true enables the backports suite (pinned) and installs the packages.
+vaapi_apply__default: false
+
+# Packages pulled from the backports suite. Named explicitly and installed
+# with an explicit suite suffix — never a dist-upgrade.
+vaapi_packages__default:
+  - intel-media-va-driver-non-free
+  - libva2
+  - libva-drm2
+  - vainfo
+
+# Suite providing the newer VA-API stack. PVE 8 is bookworm-based, and
+# bookworm-backports carries a libva with the xe backend.
+vaapi_backports_suite__default: bookworm-backports
+
+# Stable suite, named in the rollback instructions.
+vaapi_stable_suite__default: bookworm
+
+# Where PCI devices are enumerated. Overridable ONLY so the molecule scenario
+# can run the real role against a fixture tree; production never sets it.
+vaapi_sysfs_base__default: /sys/bus/pci/devices
+
+# Basename for the sources.list.d and preferences.d files this role owns, so
+# both can be identified and removed together on rollback.
+vaapi_backports_filename__default: ansible-vaapi-backports

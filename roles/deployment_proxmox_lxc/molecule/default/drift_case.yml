@@ -1,0 +1,29 @@
+---
+# One MAC case: render the netif and compute the drift through the role's own task files, then
+# record what the update task would send for netif.
+#
+# set_fact, not include `vars:`: set_vars.yml set_facts deployment_proxmox_lxc_container, and a
+# set_fact outranks a task-level vars:, so every case after the first (and the netif play above)
+# would otherwise silently reuse the previous container.
+- name: Declare the container for this case ({{ _case.name }})
+  ansible.builtin.set_fact:
+    deployment_proxmox_lxc_container: "{{ _container | combine(_case.over) }}"
+
+- name: Render the netif through the role's own transform ({{ _case.name }})
+  ansible.builtin.include_role:
+    name: deployment_proxmox_lxc
+    tasks_from: set_vars.yml
+
+- name: Compute the drift through the role's own drift.yml ({{ _case.name }})
+  ansible.builtin.include_role:
+    name: deployment_proxmox_lxc
+    tasks_from: drift.yml
+  vars:
+    deployment_proxmox_lxc__current_config: "{{ _live_config }}"
+
+- name: Record the case ({{ _case.name }})
+  ansible.builtin.set_fact:
+    _mac_cases: >-
+      {{ _mac_cases | default({}) | combine({_case.name: {
+           'drift': deployment_proxmox_lxc__drift.keys() | list | sort,
+           'netif': deployment_proxmox_lxc__update_netif}}) }}

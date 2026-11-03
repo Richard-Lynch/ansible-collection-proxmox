@@ -1,0 +1,11 @@
+---
+galaxy_info:
+  namespace: richard_lynch
+  author: Richard Lynch
+  description: >-
+    Create a narrow CI user on a Proxmox VE node, with one authorized key and NOPASSWD sudo limited
+    to pct, qm and pvesh, so a CI runner can run guest operations over SSH without root.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  galaxy_tags: [proxmox, ci, ssh, sudo]
+dependencies: []

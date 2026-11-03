@@ -1,0 +1,35 @@
+---
+# TODO break this into two roles: "cached_file_download" and "proxmox_iso_download"
+- name: Apply roles defaults
+  ansible.builtin.include_tasks: set_vars.yml
+
+- name: Get the information for the file at {{ proxmox_iso_download_path }}
+  register: proxmox_iso_download_path_st
+  ansible.builtin.stat:
+    path: "{{ proxmox_iso_download_path }}"
+
+- name: Show the information for the file at {{ proxmox_iso_download_path }}
+  ansible.builtin.debug:
+    var: proxmox_iso_download_path_st
+    verbosity: 2
+
+- name: Calculate days since file was downloaded
+  ansible.builtin.set_fact:
+    # https://docs.ansible.com/ansible/latest/collections/ansible/builtin/to_datetime_filter.html#ansible-collections-ansible-builtin-to-datetime-filter
+    # https://docs.ansible.com/ansible/latest/collections/ansible/builtin/strftime_filter.html#ansible-collections-ansible-builtin-strftime-filter
+    proxmox_iso_days_since_download: "{{ (now() - ('%Y-%m-%d %H:%M:%S' | strftime(second=proxmox_iso_download_path_st.stat.ctime) | to_datetime)).days }}"
+  when: proxmox_iso_download_path_st.stat.exists
+
+- name: Show days since last download
+  ansible.builtin.debug:
+    var: proxmox_iso_days_since_download
+    verbosity: 1
+
+- name: Download iso image (if more than a day old)
+  ansible.builtin.get_url:
+    url: "{{ proxmox_iso_url }}"
+    dest: "{{ proxmox_iso_download_path }}"
+    mode: "0644"
+    timeout: 60
+    force: true
+  when: (proxmox_iso_days_since_download | default(100000) | int) >= proxmox_iso_days_limit | default(true)

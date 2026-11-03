@@ -1,0 +1,11 @@
+# Rendered by roles/proxmox_guest_firewall for {{ _pgf_guest.name }} ({{ _pgf_guest.type }} {{ _pgf_guest.vmid }}). Do not edit by hand.
+[OPTIONS]
+enable: 1
+dhcp: 1
+policy_in: {{ _pgf_guest.policy_in | default('DROP') }}
+policy_out: {{ _pgf_guest.policy_out | default('DROP') }}
+
+[RULES]
+{% for r in _pgf_guest.rules %}
+{{ r.dir | upper }} {{ r.action | default('ACCEPT') | upper }}{% if r.source | default('') | length > 0 %} -source {{ r.source }}{% endif %}{% if r.dest | default('') | length > 0 %} -dest {{ r.dest }}{% endif %}{% if r.proto | default('') | length > 0 %} -p {{ r.proto }}{% endif %}{% if r.dport | default('') | string | length > 0 %} -dport {{ r.dport }}{% endif %} -log nolog # {{ r.comment }}
+{% endfor %}

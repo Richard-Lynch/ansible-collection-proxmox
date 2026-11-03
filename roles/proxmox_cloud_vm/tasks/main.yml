@@ -1,0 +1,266 @@
+---
+# proxmox_cloud_vm — create or converge ONE cloud-init VM on the Proxmox node this runs on.
+#
+# Shape: resolve defaults, gate, plan (pure facts, so the molecule scenario can read them), then act:
+# download the image, create the VM only if its id is absent, converge a small set of settings,
+# grow the disk, start it, and PROVE it with read-backs (config, status, the guest agent answering).
+# Never restarts a running VM: memory and cores changed on a running VM are "pending" until the
+# operator reboots it, which is reported and not done.
+
+- name: Resolve declared options over their generated defaults
+  ansible.builtin.include_tasks: _resolve_defaults.yml
+
+- name: Apply the generated argspec guards
+  ansible.builtin.include_tasks: _argspec_guards.yml
+
+- name: Preflight gates
+  ansible.builtin.include_tasks: _gates.yml
+
+- name: Plan (pure facts)
+  ansible.builtin.include_tasks: _plan.yml
+
+# ------------------------------------------------------------------------------------------
+# What exists now. A read, so it runs under --check too.
+# ------------------------------------------------------------------------------------------
+- name: Read the cluster's guests
+  ansible.builtin.command: pvesh get /cluster/resources --type vm --output-format json
+  register: _pcv_resources
+  changed_when: false
+  check_mode: false
+
+- name: HARD GATE — the read must have parsed into a guest list
+  # An unreadable list must not read as "this vmid is free".
+  ansible.builtin.assert:
+    that:
+      - (_pcv_resources.stdout | from_json) is sequence
+      - (_pcv_resources.stdout | from_json) | length > 0
+    fail_msg: "pvesh returned no guests, so the vmid {{ proxmox_cloud_vm_vmid }} cannot be judged free; refusing."
+    quiet: true
+
+- name: Find the guest that holds the vmid, if any
+  ansible.builtin.set_fact:
+    _pcv_existing: >-
+      {{ (_pcv_resources.stdout | from_json)
+         | selectattr('vmid', 'equalto', proxmox_cloud_vm_vmid | int) | list | first | default({}) }}
+
+- name: HARD GATE — the vmid is free, or already THIS VM on THIS node
+  ansible.builtin.assert:
+    that:
+      - _pcv_existing == {} or (_pcv_existing.name | default('') == proxmox_cloud_vm_name and _pcv_existing.node | default('') == proxmox_cloud_vm_node and _pcv_existing.type | default('') == 'qemu')
+    fail_msg: >-
+      vmid {{ proxmox_cloud_vm_vmid }} already belongs to {{ _pcv_existing.type | default('?') }}
+      '{{ _pcv_existing.name | default('?') }}' on {{ _pcv_existing.node | default('?') }}; this role
+      only manages qemu '{{ proxmox_cloud_vm_name }}' on {{ proxmox_cloud_vm_node }}. Refusing.
+    quiet: true
+
+# ------------------------------------------------------------------------------------------
+# The image
+# ------------------------------------------------------------------------------------------
+- name: Download the cloud image, verified against the pinned sha256
+  ansible.builtin.get_url:
+    url: "{{ proxmox_cloud_vm_image.url }}"
+    dest: "{{ _pcv_image_path }}"
+    checksum: "sha256:{{ proxmox_cloud_vm_image.sha256 }}"
+    mode: "0644"
+  when: _pcv_existing == {}
+
+# ------------------------------------------------------------------------------------------
+# Create (only when absent)
+# ------------------------------------------------------------------------------------------
+- name: Read the snippet storage's content types
+  ansible.builtin.command: pvesh get /storage/{{ proxmox_cloud_vm_snippet_storage }} --output-format json
+  register: _pcv_snip_storage
+  changed_when: false
+  check_mode: false
+
+- name: Add 'snippets' to the storage's content types (additive; asked for by the caller)
+  ansible.builtin.command:
+    argv:
+      - pvesm
+      - set
+      - "{{ proxmox_cloud_vm_snippet_storage }}"
+      - --content
+      - "{{ ((_pcv_snip_storage.stdout | from_json).content | default('') | split(',') + ['snippets']) | unique | join(',') }}"
+  when:
+    - proxmox_cloud_vm_snippet_enable | bool
+    - "'snippets' not in ((_pcv_snip_storage.stdout | from_json).content | default('') | split(','))"
+  changed_when: true
+
+- name: Read the storage's content types again
+  ansible.builtin.command: pvesh get /storage/{{ proxmox_cloud_vm_snippet_storage }} --output-format json
+  register: _pcv_snip_storage
+  changed_when: false
+  check_mode: false
+
+- name: HARD GATE — the snippet storage offers 'snippets' (else --cicustom is refused after the disk is imported)
+  ansible.builtin.assert:
+    that:
+      - "'snippets' in ((_pcv_snip_storage.stdout | from_json).content | default('') | split(','))"
+    fail_msg: >-
+      Storage '{{ proxmox_cloud_vm_snippet_storage }}' does not list 'snippets' in its content types
+      ({{ (_pcv_snip_storage.stdout | from_json).content | default('?') }}), so the guest-agent
+      vendor-data cannot be attached. Enable it on that storage (Datacenter > Storage) or name another.
+    quiet: true
+
+- name: The snippets directory exists (Proxmox creates it lazily)
+  ansible.builtin.file:
+    path: "{{ proxmox_cloud_vm_snippet_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Write the vendor-data snippet (a file on the node; converges)
+  ansible.builtin.copy:
+    content: "{{ _pcv_vendor_content }}"
+    dest: "{{ proxmox_cloud_vm_snippet_dir }}/{{ _pcv_vendor_name }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Put the public key where qm can read it
+  ansible.builtin.copy:
+    content: "{{ proxmox_cloud_vm_ssh_public_key | trim }}\n"
+    dest: "/run/proxmox_cloud_vm-{{ proxmox_cloud_vm_vmid }}.pub"
+    owner: root
+    group: root
+    mode: "0600"
+  when: _pcv_existing == {}
+
+- name: Create the VM
+  ansible.builtin.command:
+    argv: "{{ _pcv_create_argv }}"
+  when: _pcv_existing == {}
+  changed_when: true
+
+- name: Remove the key file (the VM holds its own copy)
+  ansible.builtin.file:
+    path: "/run/proxmox_cloud_vm-{{ proxmox_cloud_vm_vmid }}.pub"
+    state: absent
+  when: _pcv_existing == {}
+
+# ------------------------------------------------------------------------------------------
+# Converge what may change on a live VM
+# ------------------------------------------------------------------------------------------
+- name: Read the VM's configuration
+  ansible.builtin.command: pvesh get /nodes/{{ proxmox_cloud_vm_node }}/qemu/{{ proxmox_cloud_vm_vmid }}/config --output-format json
+  register: _pcv_cfg_raw
+  changed_when: false
+  check_mode: false
+  # Under --check a VM that does not exist yet has no config; nothing below can be judged then.
+  failed_when: _pcv_cfg_raw.rc != 0 and not (ansible_check_mode and _pcv_existing == {})
+
+- name: Parse it
+  ansible.builtin.set_fact:
+    _pcv_cfg: "{{ (_pcv_cfg_raw.stdout | from_json) if _pcv_cfg_raw.rc == 0 else {} }}"
+
+- name: HARD GATE — an existing VM carries the vendor-data (or it can never report an agent)
+  # Not converged in place: cloud-init runs vendor-data on a new instance only, so attaching it to
+  # a VM that already booted does nothing until the VM is rebuilt. Say so rather than wait 5 minutes.
+  ansible.builtin.assert:
+    that:
+      - _pcv_existing == {} or (_pcv_cfg.cicustom | default('') is search('vendor=' ~ proxmox_cloud_vm_snippet_storage ~ ':snippets/' ~ _pcv_vendor_name))
+    fail_msg: >-
+      VM {{ proxmox_cloud_vm_vmid }} exists without the guest-agent vendor-data (cicustom is
+      '{{ _pcv_cfg.cicustom | default('absent') }}'). An Ubuntu cloud image has no qemu-guest-agent,
+      so the wait below would time out. Rebuild it (it holds nothing if it never became ready).
+    quiet: true
+
+- name: Normalise the current values the way the desired ones are written
+  ansible.builtin.set_fact:
+    _pcv_cur:
+      memory: "{{ _pcv_cfg.memory | default('') }}"
+      balloon: "{{ _pcv_cfg.balloon | default('') }}"
+      cores: "{{ _pcv_cfg.cores | default('') }}"
+      onboot: "{{ _pcv_cfg.onboot | default(0) }}"
+      startup: "{{ _pcv_cfg.startup | default('') }}"
+      tags: "{{ (_pcv_cfg.tags | default('') | split(';') | sort | join(';')) }}"
+      description: "{{ _pcv_cfg.description | default('') | trim }}"
+
+- name: Which settings differ
+  ansible.builtin.set_fact:
+    _pcv_changes: "{{ _pcv_changes | default([]) + [item.key] }}"
+  loop: "{{ _pcv_desired | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: (_pcv_cur[item.key] | string | trim) != (item.value | string | trim)
+
+- name: Apply each differing setting
+  ansible.builtin.command:
+    argv: ["qm", "set", "{{ proxmox_cloud_vm_vmid }}", "--{{ item }}", "{{ _pcv_desired[item] }}"]
+  loop: "{{ _pcv_changes | default([]) }}"
+  when: _pcv_existing != {}
+  changed_when: true
+
+- name: Read the disk size now (it only ever grows)
+  ansible.builtin.set_fact:
+    _pcv_disk_now_gb: "{{ (_pcv_cfg.scsi0 | default('') | regex_search('(?<=size=)[0-9]+(?=G)') | default(0, true)) | int }}"
+
+- name: ASSERT — a disk size in a unit other than G is not judged here
+  ansible.builtin.assert:
+    that:
+      - _pcv_existing == {} or (_pcv_cfg.scsi0 | default('') is search('size=[0-9]+G'))
+    fail_msg: "scsi0 is '{{ _pcv_cfg.scsi0 | default('absent') }}': its size is not in whole G, so growing it would be a guess."
+    quiet: true
+
+- name: Grow the disk to the declared size
+  ansible.builtin.command: qm resize {{ proxmox_cloud_vm_vmid }} scsi0 {{ proxmox_cloud_vm_disk_gb }}G
+  when: _pcv_existing == {} or (_pcv_disk_now_gb | int) < (proxmox_cloud_vm_disk_gb | int)
+  changed_when: true
+
+# ------------------------------------------------------------------------------------------
+# Running
+# ------------------------------------------------------------------------------------------
+- name: Read the VM's power state
+  ansible.builtin.command: qm status {{ proxmox_cloud_vm_vmid }}
+  register: _pcv_status
+  changed_when: false
+  check_mode: false
+  failed_when: _pcv_status.rc != 0 and not (ansible_check_mode and _pcv_existing == {})
+
+- name: Start it when it is not running (a running VM is never restarted)
+  ansible.builtin.command: qm start {{ proxmox_cloud_vm_vmid }}
+  when: "'status: running' not in (_pcv_status.stdout | default(''))"
+  changed_when: true
+
+# ------------------------------------------------------------------------------------------
+# Read-backs
+# ------------------------------------------------------------------------------------------
+- name: Read the configuration back
+  ansible.builtin.command: pvesh get /nodes/{{ proxmox_cloud_vm_node }}/qemu/{{ proxmox_cloud_vm_vmid }}/config --output-format json
+  register: _pcv_cfg_after
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: ASSERT — the VM has the declared shape (the NIC on its VLAN, the agent on, the disk grown)
+  vars:
+    _c: "{{ _pcv_cfg_after.stdout | from_json }}"
+  ansible.builtin.assert:
+    that:
+      - _c.name == proxmox_cloud_vm_name
+      - _c.net0 is search('bridge=' ~ proxmox_cloud_vm_bridge ~ '(,|$)')
+      - _c.net0 is search('tag=' ~ proxmox_cloud_vm_vlan_tag ~ '(,|$)')
+      - _c.agent is search('enabled=1')
+      - (_c.scsi0 | regex_search('(?<=size=)[0-9]+(?=G)') | int) >= (proxmox_cloud_vm_disk_gb | int)
+      - (_c.cores | int) == (proxmox_cloud_vm_cores | int)
+      - (_c.memory | int) == (proxmox_cloud_vm_memory_mb | int)
+    fail_msg: >-
+      VM {{ proxmox_cloud_vm_vmid }} does not have the declared shape: net0='{{ _c.net0 | default('?') }}',
+      agent='{{ _c.agent | default('?') }}', scsi0='{{ _c.scsi0 | default('?') }}',
+      cores={{ _c.cores | default('?') }}, memory={{ _c.memory | default('?') }}. An existing VM whose NIC
+      is on another VLAN is NOT moved by this role.
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Wait for the QEMU guest agent to answer (the guest booted and cloud-init ran far enough to start it)
+  # `until` with the module's own failure on rc != 0: when the retries run out the TASK FAILS, so a
+  # VM that never came up cannot exit green. No failed_when: false anywhere in this wait.
+  ansible.builtin.command: qm agent {{ proxmox_cloud_vm_vmid }} ping
+  register: _pcv_agent
+  until: _pcv_agent.rc == 0
+  retries: "{{ (proxmox_cloud_vm_agent_wait_seconds | int / 10) | int }}"
+  delay: 10
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode

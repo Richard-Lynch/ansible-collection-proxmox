@@ -1,0 +1,38 @@
+---
+- name: "Bad case {{ item.id }}: write the input"
+  ansible.builtin.copy:
+    dest: "{{ render_root }}/bad-{{ item.id }}.json"
+    content: "{{ _good | combine(item.over) | to_json }}"
+    mode: "0644"
+
+- name: "Bad case {{ item.id }}: the gate must refuse it"
+  block:
+    - name: Load the input
+      ansible.builtin.include_vars:
+        file: "{{ render_root }}/bad-{{ item.id }}.json"
+
+    - name: Run the gates
+      ansible.builtin.include_role:
+        name: proxmox_cloud_vm
+        tasks_from: _gates
+
+    - name: The gate let it through
+      ansible.builtin.set_fact:
+        _gate_survivors: "{{ _gate_survivors | default([]) + [item.id] }}"
+  rescue:
+    - name: The refusal must name the expected gate, not an unrelated one
+      ansible.builtin.assert:
+        that:
+          - item.expect in (ansible_failed_result | to_json)
+        fail_msg: "Bad case {{ item.id }} was refused, but not by its own gate: expected '{{ item.expect }}'."
+        quiet: true
+
+    - name: The gate refused it, as it must
+      ansible.builtin.set_fact:
+        _gate_refused: "{{ _gate_refused | default([]) + [item.id] }}"
+
+- name: Persist the outcome so far for verify
+  ansible.builtin.copy:
+    dest: "{{ render_root }}/gate-outcome.json"
+    content: "{{ {'refused': _gate_refused | default([]), 'survivors': _gate_survivors | default([])} | to_json }}"
+    mode: "0644"

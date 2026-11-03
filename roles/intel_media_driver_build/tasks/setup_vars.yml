@@ -1,0 +1,37 @@
+---
+# Resolve caller-supplied vars over the generated defaults.
+
+- name: Assert the identity vars were supplied
+  ansible.builtin.assert:
+    that:
+      - imd_device_id is defined
+      - imd_device_id is match('^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$')
+      - imd_media_driver_ref is defined
+      - (imd_media_driver_ref | default('') | trim) | length > 0
+    fail_msg: >-
+      intel_media_driver_build requires imd_device_id (e.g. '8086:e20c') and imd_media_driver_ref
+      (a commit sha or branch). Got device='{{ imd_device_id | default('(undef)') }}',
+      ref='{{ imd_media_driver_ref | default('(undef)') }}'.
+    success_msg: "Building iHD {{ imd_media_driver_ref }} for GPU {{ imd_device_id }}"
+    quiet: true
+
+- name: Resolve defaults
+  ansible.builtin.set_fact:
+    imd_apply: "{{ imd_apply | default(imd_apply__default) }}"
+    imd_container: "{{ imd_container | default(imd_container__default) }}"
+    imd_gmmlib_ref: "{{ imd_gmmlib_ref | default(imd_gmmlib_ref__default) }}"
+    imd_libva_ref: "{{ imd_libva_ref | default(imd_libva_ref__default) }}"
+    imd_driver_dir: "{{ imd_driver_dir | default(imd_driver_dir__default) }}"
+    imd_install_dir: "{{ imd_install_dir | default(imd_install_dir__default) }}"
+    imd_ffmpeg_lib: "{{ imd_ffmpeg_lib | default(imd_ffmpeg_lib__default) }}"
+    imd_gmmlib_target: "{{ imd_gmmlib_target | default(imd_gmmlib_target__default) }}"
+    imd_ffmpeg: "{{ imd_ffmpeg | default(imd_ffmpeg__default) }}"
+    imd_test_seconds: "{{ imd_test_seconds | default(imd_test_seconds__default) }}"
+    imd_vainfo: "{{ imd_vainfo | default(imd_vainfo__default) }}"
+    imd_build_dir: "{{ imd_build_dir | default(imd_build_dir__default) }}"
+    imd_guest_build_dir: "{{ imd_guest_build_dir | default(imd_guest_build_dir__default) }}"
+    imd_guest_stage_dir: "{{ imd_guest_stage_dir | default(imd_guest_stage_dir__default) }}"
+    imd_image_tag: "{{ imd_image_tag | default(imd_image_tag__default) }}"
+    imd_build_timeout: "{{ imd_build_timeout | default(imd_build_timeout__default) }}"
+    # Overridable ONLY so molecule can point at a fixture tree; production never sets it.
+    imd_sysfs_base: "{{ imd_sysfs_base | default(imd_sysfs_base__default) }}"

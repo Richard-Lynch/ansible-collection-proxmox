@@ -1,0 +1,43 @@
+---
+# Resolve caller-supplied vars over the generated defaults. defaults/main.yml is GENERATED from
+# meta/argument_specs.py and holds `*__default` vars, not the plain names the tasks use.
+
+- name: Assert the GPU device id was supplied
+  # Required with no default, deliberately: this role edits a kernel cmdline, and a guessed device
+  # would mean rewriting boot configuration on behalf of a card the operator never named.
+  ansible.builtin.assert:
+    that:
+      - gpu_passthrough_device_id is defined
+      - (gpu_passthrough_device_id | default('') | trim) | length > 0
+      - gpu_passthrough_device_id is match('^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$')
+    fail_msg: >-
+      proxmox_gpu_passthrough requires gpu_passthrough_device_id as a PCI vendor:device pair,
+      e.g. '8086:e20c'. Got: '{{ gpu_passthrough_device_id | default('(undefined)') }}'.
+    success_msg: "Target GPU: {{ gpu_passthrough_device_id }}"
+    quiet: true
+
+- name: Resolve defaults
+  ansible.builtin.set_fact:
+    gpu_passthrough_apply: "{{ gpu_passthrough_apply | default(gpu_passthrough_apply__default) }}"
+    gpu_passthrough_cmdline_tokens: >-
+      {{ gpu_passthrough_cmdline_tokens | default(gpu_passthrough_cmdline_tokens__default) }}
+    gpu_passthrough_vfio_conf: >-
+      {{ gpu_passthrough_vfio_conf | default(gpu_passthrough_vfio_conf__default) }}
+    gpu_passthrough_install_packages: >-
+      {{ gpu_passthrough_install_packages | default(gpu_passthrough_install_packages__default) }}
+    gpu_passthrough_packages: >-
+      {{ gpu_passthrough_packages | default(gpu_passthrough_packages__default) }}
+    gpu_passthrough_require_driver: >-
+      {{ gpu_passthrough_require_driver | default(gpu_passthrough_require_driver__default) }}
+    gpu_passthrough_driver_modules: >-
+      {{ gpu_passthrough_driver_modules | default(gpu_passthrough_driver_modules__default) }}
+
+- name: Assert the token list is non-empty
+  # An empty token list would make the whole role a no-op that still reports success — the union
+  # would equal the current cmdline, "change needed" would be false, and an operator would reboot
+  # expecting an ACS override that was never requested.
+  ansible.builtin.assert:
+    that:
+      - (gpu_passthrough_cmdline_tokens | default([])) | length > 0
+    fail_msg: "gpu_passthrough_cmdline_tokens is empty — nothing would be changed."
+    quiet: true

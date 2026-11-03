@@ -1,0 +1,90 @@
+---
+# Asserts on what the REAL role detected and decided — not on a re-derivation of its logic.
+
+- name: Verify intel_gpu_vaapi
+  hosts: localhost
+  gather_facts: false
+  vars:
+    fake_root: /tmp/molecule-vaapi
+  tasks:
+    - name: Read the captured state
+      ansible.builtin.slurp: { src: "{{ fake_root }}/{{ item }}" }
+      loop: [captured.json, refuse.json]
+      register: _raw
+
+    - name: Decode
+      ansible.builtin.set_fact:
+        c: "{{ _raw.results[0].content | b64decode | from_json }}"
+        refuse: "{{ _raw.results[1].content | b64decode | from_json }}"
+
+    # --- device resolution --------------------------------------------------------------------------
+    - name: The role resolved the ARC, not the iGPU
+      # Both are class 0300 VGA devices. Matching on the device id rather than "the first display
+      # device" is what keeps this role pointed at the card it was asked about.
+      ansible.builtin.assert:
+        that:
+          - c.addr == '0000:01:00.0'
+          - c.driver == 'xe'
+        fail_msg: "Wrong device resolved: addr={{ c.addr }}, driver={{ c.driver }}"
+        quiet: true
+
+    - name: The role resolved the Arc's OWN render node
+      # THE key discrimination. The fixture has two render nodes: renderD128 (working iGPU) and
+      # renderD129 (the Arc). A role that probed /dev/dri/renderD128 — or simply "the first
+      # renderD*" — would test the iGPU, find it healthy, and report a completely broken Arc as
+      # fine. The fixture's vainfo deliberately succeeds on 128 and fails on 129 so that mistake
+      # cannot pass.
+      ansible.builtin.assert:
+        that:
+          - c.node == 'renderD129'
+        fail_msg: "Resolved the wrong render node: {{ c.node }} (expected renderD129)"
+        quiet: true
+
+    # --- the probe ------------------------------------------------------------------------------------
+    - name: VA-API was correctly detected as NOT working
+      # The failure mode: libva opens, then va_openDriver() fails because bookworm's libva has
+      # no xe backend. A probe that only checked "did vainfo print anything" would call this success.
+      ansible.builtin.assert:
+        that:
+          - (c.probe_ok | lower) == 'false'
+          - (c.profiles | length) == 0
+          - "'va_openDriver() returns -1' in c.raw"
+        fail_msg: >-
+          Probe wrongly reported VA-API as working: ok={{ c.probe_ok }},
+          profiles={{ c.profiles }}
+        quiet: true
+
+    - name: The stale libva version was detected
+      ansible.builtin.assert:
+        that:
+          - c.libva is search('^2\\.17')
+          - c.mediadrv == 'absent'
+        fail_msg: "Package detection wrong: libva={{ c.libva }}, mediadrv={{ c.mediadrv }}"
+        quiet: true
+
+    # --- the refusal path -----------------------------------------------------------------------------
+    - name: The role REFUSES when the GPU is still bound to vfio-pci
+      # Installing userspace cannot help while the kernel has not claimed the card. Refusing with a
+      # specific message points at the real fix (free the card) instead of leaving someone to
+      # conclude the packages did not work.
+      #
+      # Asserts on the MESSAGE, not just rc: a missing role or a syntax error also exits non-zero.
+      ansible.builtin.assert:
+        that:
+          - refuse.rc != 0
+          - "'was not found' not in refuse.output"
+          - "'bound to vfio-pci' in refuse.output"
+          - "'cannot help until the kernel binds the card' in refuse.output"
+        fail_msg: >-
+          Role did not refuse for the expected reason (rc={{ refuse.rc }}).
+          output tail: {{ refuse.output[-400:] | default('(empty)') }}
+        quiet: true
+
+    - name: The dry run installed nothing
+      # No apt fixture exists, so any attempt to install would have errored. Completing the run is
+      # itself the evidence that the apply branch was not taken.
+      ansible.builtin.assert:
+        that:
+          - c.addr | length > 0
+        fail_msg: "Dry run did not complete cleanly."
+        quiet: true

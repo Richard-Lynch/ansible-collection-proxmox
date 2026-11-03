@@ -1,0 +1,88 @@
+---
+# Probes VA-API through a SPECIFIC driver directory, inside the media container.
+#
+# Included twice (bundled / patched), so the role reports a genuine comparison. `_probe_tag`
+# selects which facts get written; `_probe_dir` is the LIBVA_DRIVERS_PATH to test.
+
+- name: "Probe vainfo via {{ _probe_dir }} ({{ _probe_tag }})"
+  # Targets the GPU's OWN render node, resolved earlier from its PCI address. Probing renderD128
+  # would exercise the working iGPU and report a completely broken Arc as healthy.
+  #
+  # LD_LIBRARY_PATH points at jellyfin-ffmpeg's bundled libva in both cases — only the DRIVER differs
+  # between the two probes, which is what makes this a controlled comparison rather than two
+  # unrelated tests.
+  #
+  # The PATCHED driver lives on the GUEST filesystem (see the install task for why), so it is tested
+  # through a THROWAWAY container that bind-mounts it — same image, same libva, same device, only
+  # the driver differs. That keeps this a controlled comparison AND avoids touching the running
+  # jellyfin container at all: no docker cp into it, no restart, no risk to a running transcode.
+  #
+  # LD_LIBRARY_PATH puts the probe dir FIRST so the driver's own libigdgmm is used rather than the
+  # container's older bundled copy — otherwise the new driver silently links against a gmmlib it was
+  # not built against.
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      {% if _probe_tag == 'before' %}
+      # The bundled driver: probe in-place inside the running container. Read-only, no side effects.
+      pct exec {{ imd_ctid }} -- docker exec {{ imd_container | quote }} sh -c \
+        'LIBVA_DRIVERS_PATH={{ _probe_dir }} \
+         LD_LIBRARY_PATH={{ imd_ffmpeg_lib }} \
+         {{ imd_vainfo }} --display drm --device /dev/dri/{{ _imd_node }} 2>&1' || true
+      {% else %}
+      # The patched driver: a disposable container off the SAME image, with the driver and its
+      # gmmlib bind-mounted OVER the image's own paths.
+      #
+      # WHY OVER THE PATHS, not via LIBVA_DRIVERS_PATH. jellyfin-ffmpeg's
+      # libva IGNORES LIBVA_DRIVERS_PATH — it only ever tries its compiled-in search paths. Setting
+      # the variable and pointing it at a separate directory silently loads the BUNDLED driver
+      # instead, which looks like the patch not working. Mounting over the exact paths libva
+      # already searches is the only arrangement that actually takes effect.
+      #
+      # And gmmlib must land on the LINKER path (/usr/lib/x86_64-linux-gnu/libigdgmm.so.12), not
+      # merely beside the driver: the .so links it dynamically, and without it dlopen fails with
+      # "libigdgmm.so.12: cannot open shared object file".
+      img=$(pct exec {{ imd_ctid }} -- docker inspect {{ imd_container | quote }} \
+              --format '{% raw %}{{.Config.Image}}{% endraw %}' 2>/dev/null)
+      [ -n "$img" ] || { echo "NOIMAGE"; exit 0; }
+      gmm=$(pct exec {{ imd_ctid }} -- sh -c \
+              'ls {{ imd_install_dir }}/libigdgmm.so.*.* 2>/dev/null | head -1')
+      [ -n "$gmm" ] || { echo "NOGMMLIB"; exit 0; }
+      pct exec {{ imd_ctid }} -- docker run --rm \
+        --device /dev/dri/{{ _imd_node }}:/dev/dri/{{ _imd_node }} \
+        -v {{ imd_install_dir }}/iHD_drv_video.so:{{ imd_driver_dir }}/iHD_drv_video.so:ro \
+        -v "$gmm":{{ imd_gmmlib_target }}:ro \
+        --entrypoint {{ imd_vainfo }} "$img" \
+        --display drm --device /dev/dri/{{ _imd_node }} 2>&1 || true
+      {% endif %}
+  register: _imd_probe
+  changed_when: false
+
+- name: "Derive the probe result ({{ _probe_tag }})"
+  # "Works" requires BOTH that the driver opened the device AND that it advertised profiles.
+  # vainfo can print a version banner and then die — checking only for output, or only for rc,
+  # would score that as success. The failure strings matched are the ones the broken driver prints.
+  vars:
+    _raw: "{{ _imd_probe.stdout | default('') }}"
+    _profiles: "{{ _imd_probe.stdout | default('') | regex_findall('VAProfile[A-Za-z0-9]+') | unique | sort }}"
+    _opened: >-
+      {{ ('va_openDriver() returns -1' not in _raw)
+         and ('vaInitialize failed' not in _raw)
+         and ('Bus error' not in _raw)
+         and ('error while loading' not in _raw)
+         and ('NOIMAGE' not in _raw)
+         and ('NOGMMLIB' not in _raw)
+         and ('cannot open shared object' not in _raw) }}
+  ansible.builtin.set_fact:
+    "_imd_ok_{{ _probe_tag }}": "{{ (_opened | bool) and (_profiles | length > 0) }}"
+    "_imd_profiles_{{ _probe_tag }}": "{{ _profiles }}"
+    "_imd_raw_{{ _probe_tag }}": "{{ _raw }}"
+
+- name: "Report the probe ({{ _probe_tag }})"
+  ansible.builtin.debug:
+    msg: >-
+      vainfo({{ _probe_tag }}) via {{ _probe_dir }}:
+      {{ 'OK — ' ~ (lookup('vars', '_imd_profiles_' ~ _probe_tag) | length) ~ ' profile(s)'
+         if (lookup('vars', '_imd_ok_' ~ _probe_tag) | bool)
+         else 'FAILED — ' ~ (_imd_probe.stdout | default('(no output)') | trim | truncate(200)) }}

@@ -1,0 +1,26 @@
+---
+- name: "Bad case: {{ _case.name }}"
+  block:
+    - name: Call the role with the bad declaration
+      ansible.builtin.include_role:
+        name: proxmox_guest_firewall
+      vars:
+        proxmox_guest_firewall_action: "{{ _case.vars.proxmox_guest_firewall_action | default('preview') }}"
+        proxmox_guest_firewall_render_only: true
+        proxmox_guest_firewall_fw_dir: /nonexistent-molecule
+        proxmox_guest_firewall_nodes: "{{ _nodes }}"
+        proxmox_guest_firewall_cluster_options: "{{ _case.vars.proxmox_guest_firewall_cluster_options | default({'enable': 1, 'policy_in': 'ACCEPT', 'policy_out': 'ACCEPT'}) }}"
+        proxmox_guest_firewall_ipsets: "{{ _case.vars.proxmox_guest_firewall_ipsets | default(_base_ipsets) }}"
+        proxmox_guest_firewall_guests: ["{{ _base_guest | combine(_case.guest | default({})) }}"]
+
+    - name: The role must have refused
+      ansible.builtin.fail:
+        msg: "BAD CASE ACCEPTED: '{{ _case.name }}' rendered without a refusal."
+  rescue:
+    - name: The refusal must be the expected gate, not some other failure
+      ansible.builtin.assert:
+        that:
+          - _case.expect in (ansible_failed_result.msg | default('') | string)
+                or _case.expect in (ansible_failed_result.results | default([]) | map(attribute='msg') | map('default', '') | join(' '))
+        fail_msg: "'{{ _case.name }}' failed for the wrong reason: {{ ansible_failed_result.msg | default(ansible_failed_result) }}"
+        quiet: true

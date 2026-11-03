@@ -1,0 +1,38 @@
+# Offline scenario — proves that the config deployment_proxmox_lxc leaves behind,
+# followed by this role, is a FIXED POINT. A second converge changes nothing, so nothing reboots.
+#
+# NO PROXMOX IS TOUCHED. The "container config" is a fixture file in the ephemeral directory,
+# pve_conf.py stands in for PVE's own read/rewrite of it, and only the PURE halves of the two
+# roles run: deployment_proxmox_lxc's tasks/drift.yml and this role's tasks/configure.yml.
+# The reboot (`pct reboot`) lives in tasks/main.yml and is not reached.
+---
+dependency:
+  name: galaxy
+driver:
+  name: default
+platforms:
+  - name: localhost
+provisioner:
+  name: ansible
+  # Molecule runs from the scenario directory, so the repo's ansible.cfg roles_path (./roles) does
+  # not resolve. Pointed at the repo root so converge.yml can include the role under test.
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../"
+    # Dependencies (galaxy.yml) are installed into collections.galaxy/ at the repo root; the
+    # second entry resolves this collection itself when the checkout sits at
+    # ansible_collections/richard_lynch/proxmox. molecule does not read a repo ansible.cfg.
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../collections.galaxy:${MOLECULE_PROJECT_DIRECTORY}/../../../../.."
+  inventory:
+    host_vars:
+      localhost:
+        ansible_connection: local
+  playbooks:
+    converge: converge.yml
+    verify: verify.yml
+verifier:
+  name: ansible
+scenario:
+  # No `idempotence` step: converge deliberately RESETS the fixtures at its start, so a re-run
+  # reports changes by design. The idempotence claim is tested at the right level INSIDE converge,
+  # which runs two full passes over each fixture and records what each pass changed.
+  test_sequence: [syntax, converge, verify]

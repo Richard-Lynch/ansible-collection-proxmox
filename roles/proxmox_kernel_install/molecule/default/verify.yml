@@ -1,0 +1,90 @@
+---
+# Asserts on what the REAL role derived and did, not on a re-derivation of its logic.
+
+- name: Verify proxmox_kernel_install
+  hosts: localhost
+  gather_facts: false
+  vars:
+    fake_root: /tmp/molecule-kernel
+  tasks:
+    - name: Read the captured state
+      ansible.builtin.slurp: { src: "{{ fake_root }}/{{ item }}" }
+      loop: [captured_dry.json, captured_already.json, captured_refusals.json]
+      register: _raw
+
+    - name: Decode
+      ansible.builtin.set_fact:
+        dry: "{{ _raw.results[0].content | b64decode | from_json }}"
+        already: "{{ _raw.results[1].content | b64decode | from_json }}"
+        refuse: "{{ _raw.results[2].content | b64decode | from_json }}"
+
+    # --- the dry run --------------------------------------------------------------------------------
+    - name: The role read the running kernel and the apt candidate correctly
+      ansible.builtin.assert:
+        that:
+          - dry.running == '6.8.12-4-pve'
+          - "'6.14.8-2' in dry.candidate"
+          - dry.boot_free == '64500'
+        fail_msg: "State detection wrong: {{ dry }}"
+        quiet: true
+
+    - name: A kernel that is NOT installed is correctly identified as missing
+      # The 6.8-vs-6.14 discrimination is the whole point: dpkg lists three 6.8 packages, and a
+      # sloppy substring match ('proxmox-kernel-6' in the list) would wrongly report 6.14 as
+      # already present and silently skip the install the reboot depends on.
+      ansible.builtin.assert:
+        that:
+          - (dry.already | lower) == 'false'
+        fail_msg: >-
+          proxmox-kernel-6.14 was wrongly reported as already installed
+          (already={{ dry.already }}) despite dpkg listing only 6.8 packages.
+        quiet: true
+
+    - name: The DRY RUN installed nothing
+      # No apt fixture exists at all, so any attempt to actually install would have errored. The
+      # run completing proves the apply branch was not taken.
+      ansible.builtin.assert:
+        that:
+          - dry.candidate | length > 0
+        fail_msg: "Dry run did not complete cleanly."
+        quiet: true
+
+    # --- idempotence ------------------------------------------------------------------------------
+    - name: An already-installed kernel short-circuits even with apply=true
+      # The role's real idempotence check: 6.8 IS installed on the fixture host, so the apply
+      # branch must be skipped entirely. If this regressed, a routine re-run would attempt an apt
+      # transaction on a hypervisor for no reason.
+      ansible.builtin.assert:
+        that:
+          - (already.already | lower) == 'true'
+        fail_msg: >-
+          proxmox-kernel-6.8 was not detected as already installed
+          (already={{ already.already }}) — the apply branch would have run needlessly.
+        quiet: true
+
+    # --- refusal paths -----------------------------------------------------------------------------
+    - name: The role REFUSES when apt has no candidate
+      # Asserts on the MESSAGE, not just rc: a missing role or a syntax error also exits non-zero,
+      # so rc alone could pass for entirely the wrong reason.
+      ansible.builtin.assert:
+        that:
+          - refuse.nocand_rc != 0
+          - "'was not found' not in refuse.nocand_out"
+          - "'no installation candidate' in refuse.nocand_out"
+        fail_msg: >-
+          Role did not refuse a package with no candidate (rc={{ refuse.nocand_rc }}).
+          output tail: {{ refuse.nocand_out[-400:] | default('(empty)') }}
+        quiet: true
+
+    - name: The role REFUSES when /boot has insufficient free space
+      # A full /boot during initramfs generation can leave a half-written initramfs for a kernel
+      # the bootloader already references — a routine reboot then becomes a recovery session.
+      ansible.builtin.assert:
+        that:
+          - refuse.nospace_rc != 0
+          - "'was not found' not in refuse.nospace_out"
+          - "'free on /boot' in refuse.nospace_out"
+        fail_msg: >-
+          Role did not refuse on insufficient /boot space (rc={{ refuse.nospace_rc }}).
+          output tail: {{ refuse.nospace_out[-400:] | default('(empty)') }}
+        quiet: true

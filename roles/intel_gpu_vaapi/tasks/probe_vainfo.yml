@@ -1,0 +1,47 @@
+---
+# Probes VA-API on the GPU's OWN render node and records whether it genuinely works.
+#
+# Included twice (before/after installing), so the role reports a comparison rather than a claim.
+# `_probe_when` selects which set of facts to write.
+
+- name: "Probe vainfo on {{ _va_node }} ({{ _probe_when }})"
+  # Deliberately targets the GPU's own node, resolved earlier from its PCI address. Probing
+  # /dev/dri/renderD128 would test whatever device happens to be first — on a host with an integrated GPU
+  # and a discrete Arc that is often the iGPU, which works and would mask a broken Arc.
+  #
+  # VAINFO_ABSENT is reported rather than treated as failure: vainfo missing is a package to
+  # install, not evidence about the GPU.
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      if ! command -v vainfo >/dev/null 2>&1; then echo "VAINFO_ABSENT"; exit 0; fi
+      vainfo --display drm --device "/dev/dri/{{ _va_node }}" 2>&1
+  register: _va_probe
+  changed_when: false
+  failed_when: false
+
+- name: "Derive the probe result ({{ _probe_when }})"
+  # "Works" means BOTH: the driver opened the device AND it advertised at least one profile.
+  # vainfo can print a version banner and then fail — checking only for output, or only for rc,
+  # would call that success. The va_openDriver failure string is matched explicitly because it is
+  # the symptom of a libva without an xe backend.
+  vars:
+    _raw: "{{ _va_probe.stdout | default('') }}"
+    _profiles: "{{ _va_probe.stdout | default('') | regex_findall('VAProfile[A-Za-z0-9]+') | unique | sort }}"
+    _opened: >-
+      {{ ('va_openDriver() returns -1' not in _raw)
+         and ('VAINFO_ABSENT' not in _raw)
+         and ('vaInitialize failed' not in _raw) }}
+  ansible.builtin.set_fact:
+    "_va_probe_ok_{{ _probe_when }}": "{{ (_opened | bool) and (_profiles | length > 0) }}"
+    "_va_profiles_{{ _probe_when }}": "{{ _profiles }}"
+    "_va_probe_raw_{{ _probe_when }}": "{{ _raw }}"
+
+- name: "Report the probe ({{ _probe_when }})"
+  ansible.builtin.debug:
+    msg: >-
+      vainfo({{ _probe_when }}) on {{ _va_node }}:
+      {{ 'OK — ' ~ (lookup('vars', '_va_profiles_' ~ _probe_when) | length) ~ ' profile(s)'
+         if (lookup('vars', '_va_probe_ok_' ~ _probe_when) | bool)
+         else 'FAILED — ' ~ (_va_probe.stdout | default('(no output)') | trim | truncate(200)) }}

@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  namespace: richard_lynch
+  author: Richard Lynch
+  description: >-
+    Free a GPU from vfio-pci on a Proxmox VE host so a host driver can bind it: check the GPU, its
+    driver and vfio options, install firmware and tooling, and append an ACS override to the kernel
+    cmdline, behind an apply flag. Never reboots.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  galaxy_tags: [proxmox, gpu, vfio, kernel]
+dependencies: []

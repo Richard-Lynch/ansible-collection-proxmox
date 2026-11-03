@@ -1,0 +1,80 @@
+---
+# Runs REAL hardware encodes through the patched driver, in a throwaway container.
+#
+# WHY THIS EXISTS. `vainfo` listing a profile proves the driver enumerated a capability; it does NOT
+# prove the media engine can actually do the work. On a small-BAR card that distinction matters —
+# the whole failure being fixed was a crash during buffer allocation, which enumeration alone might
+# not exercise. So each codec that motivated this work gets an actual encode.
+#
+# Uses a synthetic source (lavfi testsrc2) rather than a real file: no dependency on library
+# contents, no risk of touching media, and it still drives the full upload → encode path.
+
+- name: Run real hardware encodes for each target codec
+  # `-f null -` discards the output: this measures whether the engine WORKS, not throughput, and it
+  # writes nothing anywhere.
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      img=$(pct exec {{ imd_ctid }} -- docker inspect {{ imd_container | quote }} \
+              --format '{% raw %}{{.Config.Image}}{% endraw %}' 2>/dev/null)
+      [ -n "$img" ] || { echo "NOIMAGE"; exit 0; }
+      gmm=$(pct exec {{ imd_ctid }} -- sh -c \
+              'ls {{ imd_install_dir }}/libigdgmm.so.*.* 2>/dev/null | head -1')
+      [ -n "$gmm" ] || { echo "NOGMMLIB"; exit 0; }
+
+      run_codec() {
+        name="$1"; enc="$2"; fmt="$3"; size="$4"
+        if pct exec {{ imd_ctid }} -- docker run --rm \
+             --device /dev/dri/{{ _imd_node }}:/dev/dri/{{ _imd_node }} \
+             -v {{ imd_install_dir }}/iHD_drv_video.so:{{ imd_driver_dir }}/iHD_drv_video.so:ro \
+             -v "$gmm":{{ imd_gmmlib_target }}:ro \
+             --entrypoint sh "$img" -c \
+             "{{ imd_ffmpeg }} -hide_banner -loglevel error \
+                -f lavfi -i testsrc2=size=${size}:rate=30 -t {{ imd_test_seconds }} \
+                -vaapi_device /dev/dri/{{ _imd_node }} \
+                -vf format=${fmt},hwupload -c:v ${enc} -f null -" >/dev/null 2>&1; then
+          echo "CODEC|${name}|OK"
+        else
+          echo "CODEC|${name}|FAIL"
+        fi
+      }
+
+      # The two codecs older integrated GPUs cannot do.
+      run_codec "hevc10" "hevc_vaapi" "p010" "1920x1080"
+      run_codec "av1"    "av1_vaapi"  "nv12" "1280x720"
+      # The common Jellyfin output codec.
+      run_codec "h264"   "h264_vaapi" "nv12" "1920x1080"
+  register: _imd_codecs
+  changed_when: false
+
+- name: Parse the codec results
+  ansible.builtin.set_fact:
+    _imd_codec_ok: >-
+      {{ _imd_codecs.stdout_lines | select('match', '^CODEC') | map('split', '|')
+         | selectattr(2, 'eq', 'OK') | map(attribute=1) | list }}
+    _imd_codec_fail: >-
+      {{ _imd_codecs.stdout_lines | select('match', '^CODEC') | map('split', '|')
+         | selectattr(2, 'eq', 'FAIL') | map(attribute=1) | list }}
+
+- name: Report the encode results
+  ansible.builtin.debug:
+    msg:
+      - "HEVC 10-bit encode: {{ 'PASS' if 'hevc10' in _imd_codec_ok else 'FAIL' }}"
+      - "AV1 encode:         {{ 'PASS' if 'av1' in _imd_codec_ok else 'FAIL' }}"
+      - "H.264 encode:       {{ 'PASS' if 'h264' in _imd_codec_ok else 'FAIL' }}"
+
+- name: HARD GATE — the codecs that motivated this work must actually encode
+  # Profile enumeration is not proof. If HEVC 10-bit and AV1 cannot encode, the patched driver has
+  # not delivered what it was built for, and wiring it into Jellyfin would be premature.
+  ansible.builtin.assert:
+    that:
+      - "'hevc10' in _imd_codec_ok"
+      - "'av1' in _imd_codec_ok"
+    fail_msg: >-
+      Hardware encode FAILED for: {{ _imd_codec_fail | join(', ') }}.
+      Raw: {{ _imd_codecs.stdout_lines | default([]) }}
+      The bundled driver is untouched and Jellyfin is unmodified, so nothing has regressed.
+    success_msg: >-
+      Real hardware encodes passed: {{ _imd_codec_ok | join(', ') }}.
+    quiet: true

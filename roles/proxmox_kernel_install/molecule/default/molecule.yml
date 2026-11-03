@@ -1,0 +1,28 @@
+---
+# Offline: runs the REAL role against fake dpkg/apt-cache/df/uname/ls, modelling a host
+# that runs a 6.8 kernel with 6.14 available but not installed. No PVE, no apt, no root.
+#
+# Coverage: better than the "parse/check" tier usual for Proxmox roles. The availability gate, the free-space gate, the already-installed short-circuit,
+# the post-install read-back and the initramfs check are all real logic and are genuinely asserted.
+# NOT covered, and not claimed: the actual apt transaction, and whether the installed kernel boots.
+dependency: { name: galaxy }
+driver: { name: default }
+platforms: [{ name: localhost }]
+provisioner:
+  name: ansible
+  inventory: { host_vars: { localhost: { ansible_connection: local } } }
+  playbooks: { converge: converge.yml, verify: verify.yml }
+  env:
+    # Molecule runs from inside the role dir, so the repo's roles/ is not on the search path.
+    # Setting it is what lets converge.yml call the REAL role instead of reproducing its effects —
+    # the latter would be a tautological test.
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../"
+verifier: { name: ansible }
+scenario:
+  # No idempotence step: converge stages fixtures (deliberately non-idempotent, so a stale fixture
+  # cannot make a broken role pass). The role's real idempotence — the already-installed
+  # short-circuit — is asserted explicitly in verify.yml instead.
+  test_sequence:
+    - syntax
+    - converge
+    - verify

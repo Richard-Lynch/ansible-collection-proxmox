@@ -1,0 +1,156 @@
+# Render a MULTI-INTERFACE netif through the role's REAL transform.
+#
+# WHY MULTI-INTERFACE IS THE WHOLE POINT. The failure this guards against collapses every
+# interface onto the last one (see the comment on the task in tasks/set_vars.yml). With exactly ONE
+# interface, "all entries get the last entry's value" is indistinguishable from correct, so a
+# single-interface scenario would pass against the broken code and prove nothing — this one
+# declares three, which is the minimum that can tell the two apart.
+#
+# This includes the role's own tasks/set_vars.yml rather than re-deriving the expression here.
+# A scenario that copied the filter chain would be asserting a copy against itself (MOLMIRROR-01)
+# and would stay green through a real regression.
+---
+- name: Converge
+  hosts: localhost
+  gather_facts: false
+  vars:
+    # Deliberately DISTINCT in every field that matters — name, address and tag — so a collapse
+    # onto any single entry is detectable no matter which entry it collapses onto.
+    _netif_fixture:
+      net0:
+        name: eth0
+        bridge: vmbr0
+        ip: "192.0.2.10/24"
+        tag: 10
+      net1:
+        name: eth1
+        bridge: vmbr0
+        ip: "198.51.100.10/24"
+        tag: 20
+      net2:
+        name: eth2
+        bridge: vmbr0
+        ip: "203.0.113.10/24"
+        tag: 30
+
+  tasks:
+    - name: Run the role's own netif transform
+      # set_vars.yml is pure computation — it touches no API and needs no credential, which is
+      # what makes this offline. The container dict carries only what the transform reads.
+      ansible.builtin.include_role:
+        name: deployment_proxmox_lxc
+        tasks_from: set_vars.yml
+      vars:
+        deployment_proxmox_lxc_container:
+          netif: "{{ _netif_fixture }}"
+
+    - name: Save the rendered netif so verify can assert on it independently
+      # set_fact does NOT survive into molecule's separate verify playbook, so the result is
+      # written to the scenario's ephemeral directory and read back there. Asserting in converge
+      # alone would work, but keeping verify meaningful is the house shape.
+      ansible.builtin.copy:
+        content: "{{ deployment_proxmox_lxc_container_netif }}"
+        dest: "{{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/netif.json"
+        mode: "0644"
+
+    # THE DRIFT COMPARISON. The proxmox module's own comparison reports every running guest as
+    # changed, because PVE returns `tags` as a `;` string and `description` with a trailing
+    # newline. Each case below is a shape the live API actually returns against what an
+    # inventory declares.
+    - name: Compare live-shaped configs with declared ones, through the role's own filter
+      ansible.builtin.set_fact:
+        _drift_cases:
+          in_sync: "{{ _live | richard_lynch.proxmox.dpl_lxc_config_drift(_want) }}"
+          tags_reordered: "{{ _live | combine({'tags': 'docker;ansible'}) | richard_lynch.proxmox.dpl_lxc_config_drift(_want) }}"
+          tag_added: "{{ _live | richard_lynch.proxmox.dpl_lxc_config_drift(_want | combine({'tags': ['ansible', 'docker', 'x']})) }}"
+          description_changed: "{{ _live | richard_lynch.proxmox.dpl_lxc_config_drift(_want | combine({'description': 'other'})) }}"
+          memory_changed: "{{ _live | richard_lynch.proxmox.dpl_lxc_config_drift(_want | combine({'memory': 8192})) }}"
+          vlan_changed: "{{ _live | richard_lynch.proxmox.dpl_lxc_config_drift(_want | combine({'net': {'net0': 'name=eth0,ip=dhcp,tag=50'}})) }}"
+          firewall_bool: "{{ _live | combine({'net0': _live.net0 ~ ',firewall=1'}) | richard_lynch.proxmox.dpl_lxc_config_drift(_want | combine({'net': {'net0': 'name=eth0,firewall=True'}})) }}"
+          onboot_off_absent: "{{ _live | dict2items | rejectattr('key', 'equalto', 'onboot') | items2dict | richard_lynch.proxmox.dpl_lxc_config_drift(_want | combine({'onboot': false})) }}"
+          disk_grown: "{{ _live | richard_lynch.proxmox.dpl_lxc_config_drift(_want | combine({'rootfs': {'storage': 'local-lvm', 'size_gb': 40}})) }}"
+      vars:
+        _live:
+          cores: 2
+          description: "LXC web — application server\n"
+          features: nesting=1
+          hostname: web
+          memory: 4096
+          mp0: /srv/app-state/web,mp=/mnt/app-state,backup=0
+          net0: name=eth0,bridge=vmbr0,gw=192.0.2.1,hwaddr=BC:24:11:00:00:0A,ip=dhcp,tag=40,type=veth
+          onboot: 1
+          rootfs: local-lvm:vm-101-disk-0,size=32G
+          startup: order=210
+          swap: 1024
+          tags: ansible;docker
+        _want:
+          hostname: web
+          description: "LXC web — application server"
+          cores: "2"
+          memory: "4096"
+          swap: "1024"
+          onboot: true
+          tags: [ansible, docker]
+          features: {nesting: 1}
+          startup: {order: "210"}
+          net: {net0: "name=eth0,ip=dhcp,bridge=vmbr0,gw=192.0.2.1,tag=40"}
+          rootfs: {storage: local-lvm, size_gb: "32"}
+
+    - name: Save the drift cases for verify
+      ansible.builtin.copy:
+        content: "{{ _summary }}"
+        dest: "{{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/drift.json"
+        mode: "0644"
+      vars:
+        _summary: >-
+          {% set out = {} %}
+          {% for name, d in _drift_cases.items() %}
+          {%   set _ = out.update({name: {'drift': d.keys() | list | sort, 'restart': d | richard_lynch.proxmox.dpl_lxc_drift_needs_restart}}) %}
+          {% endfor %}
+          {{ out | to_json }}
+
+# THE MAC. An update that re-PUTs net0 without the hwaddr PVE generated makes PVE generate a new
+# one, and the guest takes a new DHCP lease even on a description-only drift. These run the
+# role's REAL tasks/drift.yml — the file create.yml includes — and record the netif the update
+# task would send.
+- name: Converge the drift tasks against a live-shaped config
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _live_config:
+      cores: 2
+      description: "LXC web\n"
+      hostname: web
+      memory: 4096
+      net0: name=eth0,bridge=vmbr0,gw=192.0.2.1,hwaddr=BC:24:11:00:00:0A,ip=dhcp,tag=40,type=veth
+      onboot: 1
+      rootfs: local-lvm:vm-101-disk-0,size=32G
+      swap: 1024
+      tags: ansible;docker
+    _container:
+      hostname: web
+      description: "LXC web"
+      cores: 2
+      memory_mb: 4096
+      swap_mb: 1024
+      onboot: true
+      tags: [ansible, docker]
+      storage: local-lvm
+      storage_gb: 32
+      netif:
+        net0: {name: eth0, ip: dhcp, bridge: vmbr0, gw: 192.0.2.1, tag: 40}
+  tasks:
+    - name: Run the role's drift tasks for each case
+      ansible.builtin.include_tasks: drift_case.yml
+      loop:
+        - {name: in_sync, over: {}}
+        - {name: description_only, over: {description: "LXC web — changed"}}
+        - {name: vlan_changed, over: {netif: {net0: {name: eth0, ip: dhcp, bridge: vmbr0, gw: 192.0.2.1, tag: 50}}}}
+      loop_control:
+        loop_var: _case
+
+    - name: Save the MAC cases for verify
+      ansible.builtin.copy:
+        content: "{{ _mac_cases | to_json }}"
+        dest: "{{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/mac.json"
+        mode: "0644"
