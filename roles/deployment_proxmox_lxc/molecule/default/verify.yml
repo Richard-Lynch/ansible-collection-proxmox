@@ -84,7 +84,7 @@
   gather_facts: false
   vars:
     _m: "{{ lookup('file', lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') ~ '/mac.json') | from_json }}"
-    _mac: BC:24:11:00:00:0A
+    _mac: BE:24:11:00:00:0A
 
   tasks:
     - name: Show each case

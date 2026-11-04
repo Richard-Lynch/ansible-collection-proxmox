@@ -26,8 +26,8 @@ from lxc_config_drift import (  # noqa: E402
     lxc_update_netif,
 )
 
-MAC0 = "BC:24:11:00:00:0A"
-MAC1 = "BC:24:11:00:00:01"
+MAC0 = "BE:24:11:00:00:0A"
+MAC1 = "BE:24:11:00:00:01"
 
 # A live config as GET /nodes/{node}/lxc/{vmid}/config returns it.
 LIVE = {
