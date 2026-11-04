@@ -7,6 +7,7 @@
 .github/workflows/disclose.yml
 .github/workflows/release.yml
 .gitignore
+.python-version
 CHANGELOG.md
 LICENSE
 README.md
@@ -20,6 +21,7 @@ plugins/filter/dpl_lxc_drift_needs_restart.yml
 plugins/filter/dpl_lxc_netif_with_live_hwaddr.yml
 plugins/filter/dpl_lxc_update_netif.yml
 plugins/filter/lxc_config_drift.py
+renovate.json
 roles/deployment_proxmox_lxc/README.md
 roles/deployment_proxmox_lxc/defaults/main.yml
 roles/deployment_proxmox_lxc/meta/argument_specs.py
