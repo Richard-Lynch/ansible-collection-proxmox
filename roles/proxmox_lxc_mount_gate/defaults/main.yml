@@ -1,0 +1,36 @@
+---
+# AUTO-GENERATED defaults file — DO NOT EDIT.
+#
+# Source of truth: roles/proxmox_lxc_mount_gate/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate proxmox_lxc_mount_gate
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+# Entrypoint:      main
+
+# Units started, in this order, before the mount unit (for example an
+# iSCSI login service). With apply they are also enabled and started.
+proxmox_lxc_mount_gate_requires_units__default: []
+
+# How many times the hookscript checks the mount before refusing the start.
+proxmox_lxc_mount_gate_wait_tries__default: 30
+
+# Seconds between the hookscript's checks.
+proxmox_lxc_mount_gate_wait_delay__default: 5
+
+# The Proxmox VE storage whose snippets the container config references.
+proxmox_lxc_mount_gate_snippets_storage__default: local
+
+# The host directory of that storage's snippets, where the hookscript is written.
+proxmox_lxc_mount_gate_snippets_dir__default: /var/lib/vz/snippets
+
+# File name of the hookscript in the snippets directory. Empty means
+# lxc-mount-gate-<ctid>.sh.
+proxmox_lxc_mount_gate_hook_name__default: ''
+
+# Safety gate. false (default) stages the hookscript and reports what apply
+# would change, with no change to how the host boots. true enables and
+# starts the units, fails if the path is not then mounted, wires the
+# hookscript into the container config and sets onboot: 1.
+proxmox_lxc_mount_gate_apply__default: false

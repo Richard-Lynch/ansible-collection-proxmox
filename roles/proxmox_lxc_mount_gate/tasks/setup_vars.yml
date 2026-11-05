@@ -1,0 +1,17 @@
+---
+# Role-specific derivations. Kept out of _resolve_defaults.yml, which is GENERATED.
+
+- name: Setup vars — the hookscript file name
+  ansible.builtin.set_fact:
+    _proxmox_lxc_mount_gate_hook_file: >-
+      {{ proxmox_lxc_mount_gate_hook_name
+         if (proxmox_lxc_mount_gate_hook_name | length) > 0
+         else 'lxc-mount-gate-' ~ proxmox_lxc_mount_gate_ctid ~ '.sh' }}
+
+- name: Setup vars — the hookscript reference and the container config path
+  ansible.builtin.set_fact:
+    # What the container config's `hookscript:` line names: <storage>:snippets/<file>.
+    _proxmox_lxc_mount_gate_hook_ref: >-
+      {{ proxmox_lxc_mount_gate_snippets_storage ~ ':snippets/' ~ _proxmox_lxc_mount_gate_hook_file }}
+    # Proxmox VE keeps every container's config in the cluster filesystem at this path.
+    _proxmox_lxc_mount_gate_ct_conf: "/etc/pve/lxc/{{ proxmox_lxc_mount_gate_ctid }}.conf"

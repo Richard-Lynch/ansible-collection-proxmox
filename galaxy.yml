@@ -4,12 +4,12 @@
 ---
 namespace: richard_lynch
 name: proxmox
-version: 1.0.0
+version: 1.1.0
 readme: README.md
 authors:
   - Richard Lynch
 description: >-
-  Roles for running Proxmox VE nodes: LXC and VM guests from templates or cloud images, LXC templates, guest firewall rendering, storage layout, vzdump jobs, CI API and SSH access, kernel install, GPU passthrough and Intel VA-API media drivers, and Docker-in-LXC fixes.
+  Roles for running Proxmox VE nodes: LXC and VM guests from templates or cloud images, LXC templates, guest firewall rendering, storage layout, vzdump jobs, CI API and SSH access, kernel install, GPU passthrough and Intel VA-API media drivers, Docker-in-LXC fixes, and gating a container's start on a host mount.
 license:
   - GPL-3.0-or-later
 tags:
@@ -29,6 +29,7 @@ homepage: https://github.com/Richard-Lynch/ansible-collection-proxmox
 issues: https://github.com/Richard-Lynch/ansible-collection-proxmox/issues
 build_ignore:
   - .ansible-lint
+  - ci
   - configured_roles.txt
   - roles/*/defaults/SKIP
   - .github

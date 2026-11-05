@@ -11,6 +11,7 @@
 CHANGELOG.md
 LICENSE
 README.md
+ci/affected-scenarios.sh
 configured_roles.txt
 devkit.toml
 export.manifest
@@ -185,6 +186,20 @@ roles/proxmox_lxc_docker_fix/molecule/default/verify.yml
 roles/proxmox_lxc_docker_fix/tasks/_resolve_defaults.yml
 roles/proxmox_lxc_docker_fix/tasks/configure.yml
 roles/proxmox_lxc_docker_fix/tasks/main.yml
+roles/proxmox_lxc_mount_gate/README.md
+roles/proxmox_lxc_mount_gate/defaults/main.yml
+roles/proxmox_lxc_mount_gate/meta/argument_specs.py
+roles/proxmox_lxc_mount_gate/meta/argument_specs.yml
+roles/proxmox_lxc_mount_gate/meta/main.yml
+roles/proxmox_lxc_mount_gate/molecule/default/converge.yml
+roles/proxmox_lxc_mount_gate/molecule/default/missing_option.yml
+roles/proxmox_lxc_mount_gate/molecule/default/molecule.yml
+roles/proxmox_lxc_mount_gate/molecule/default/verify.yml
+roles/proxmox_lxc_mount_gate/tasks/_argspec_guards.yml
+roles/proxmox_lxc_mount_gate/tasks/_resolve_defaults.yml
+roles/proxmox_lxc_mount_gate/tasks/main.yml
+roles/proxmox_lxc_mount_gate/tasks/setup_vars.yml
+roles/proxmox_lxc_mount_gate/templates/lxc-mount-gate-hook.sh.j2
 roles/proxmox_storage_layout/README.md
 roles/proxmox_storage_layout/defaults/SKIP
 roles/proxmox_storage_layout/defaults/main.yml
@@ -235,4 +250,7 @@ roles/vm_truenas/tasks/cleanup_boot.yml
 roles/vm_truenas/tasks/main.yml
 roles/vm_truenas/tasks/set_vars.yml
 roles/vm_truenas/vars/main.yml
+tests/sanity/ignore-2.19.txt
+tests/sanity/ignore-2.20.txt
+tests/sanity/ignore-2.21.txt
 tests/unit/test_lxc_config_drift.py

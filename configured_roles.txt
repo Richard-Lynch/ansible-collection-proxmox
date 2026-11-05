@@ -9,6 +9,7 @@ proxmox_gpu_passthrough
 proxmox_guest_firewall
 proxmox_kernel_install
 proxmox_lxc_docker_fix
+proxmox_lxc_mount_gate
 proxmox_storage_layout
 proxmox_template_lxc
 proxmox_vzdump

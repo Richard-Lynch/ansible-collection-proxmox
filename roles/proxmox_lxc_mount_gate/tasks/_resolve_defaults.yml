@@ -1,0 +1,51 @@
+---
+# AUTO-GENERATED defaults resolver — DO NOT EDIT.
+#
+# Source of truth: roles/proxmox_lxc_mount_gate/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate proxmox_lxc_mount_gate
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+
+# Binds every declared option to its generated default, so a caller-supplied value
+# wins and an unsupplied one falls back rather than evaluating Undefined.
+#
+# Include this FIRST from every entrypoint:
+#   - ansible.builtin.include_tasks: _resolve_defaults.yml
+#
+# Role-specific setup logic belongs in tasks/setup_vars.yml, NOT here — this file is
+# overwritten on every generation.
+#
+# TWO BRANCHES, because `set_fact` persists for the whole play. A role invoked twice in
+# one play would otherwise see its OWN leftover facts on the second call, so a later
+# caller that omitted an option silently inherited the earlier caller's value instead of
+# the declared default. On a repeat call this ignores the role's own facts and rebinds
+# the defaults; an include-level `vars:` shadows the fact, so a value the caller DID
+# supply this time still wins. Roles called once per play only ever run the first branch.
+
+- name: Resolve declared options over their generated defaults
+  ansible.builtin.set_fact:
+    proxmox_lxc_mount_gate_requires_units: "{{ proxmox_lxc_mount_gate_requires_units | default(proxmox_lxc_mount_gate_requires_units__default) if proxmox_lxc_mount_gate_requires_units__default is defined else proxmox_lxc_mount_gate_requires_units | default(omit) }}"
+    proxmox_lxc_mount_gate_wait_tries: "{{ proxmox_lxc_mount_gate_wait_tries | default(proxmox_lxc_mount_gate_wait_tries__default) if proxmox_lxc_mount_gate_wait_tries__default is defined else proxmox_lxc_mount_gate_wait_tries | default(omit) }}"
+    proxmox_lxc_mount_gate_wait_delay: "{{ proxmox_lxc_mount_gate_wait_delay | default(proxmox_lxc_mount_gate_wait_delay__default) if proxmox_lxc_mount_gate_wait_delay__default is defined else proxmox_lxc_mount_gate_wait_delay | default(omit) }}"
+    proxmox_lxc_mount_gate_snippets_storage: "{{ proxmox_lxc_mount_gate_snippets_storage | default(proxmox_lxc_mount_gate_snippets_storage__default) if proxmox_lxc_mount_gate_snippets_storage__default is defined else proxmox_lxc_mount_gate_snippets_storage | default(omit) }}"
+    proxmox_lxc_mount_gate_snippets_dir: "{{ proxmox_lxc_mount_gate_snippets_dir | default(proxmox_lxc_mount_gate_snippets_dir__default) if proxmox_lxc_mount_gate_snippets_dir__default is defined else proxmox_lxc_mount_gate_snippets_dir | default(omit) }}"
+    proxmox_lxc_mount_gate_hook_name: "{{ proxmox_lxc_mount_gate_hook_name | default(proxmox_lxc_mount_gate_hook_name__default) if proxmox_lxc_mount_gate_hook_name__default is defined else proxmox_lxc_mount_gate_hook_name | default(omit) }}"
+    proxmox_lxc_mount_gate_apply: "{{ proxmox_lxc_mount_gate_apply | default(proxmox_lxc_mount_gate_apply__default) if proxmox_lxc_mount_gate_apply__default is defined else proxmox_lxc_mount_gate_apply | default(omit) }}"
+  when: not (_proxmox_lxc_mount_gate__argspec_resolved | default(false))
+
+- name: Rebind the defaults on a repeat call, ignoring this role's own leftover facts
+  ansible.builtin.set_fact:
+    proxmox_lxc_mount_gate_requires_units: "{{ proxmox_lxc_mount_gate_requires_units__default if proxmox_lxc_mount_gate_requires_units__default is defined else proxmox_lxc_mount_gate_requires_units | default(omit) }}"
+    proxmox_lxc_mount_gate_wait_tries: "{{ proxmox_lxc_mount_gate_wait_tries__default if proxmox_lxc_mount_gate_wait_tries__default is defined else proxmox_lxc_mount_gate_wait_tries | default(omit) }}"
+    proxmox_lxc_mount_gate_wait_delay: "{{ proxmox_lxc_mount_gate_wait_delay__default if proxmox_lxc_mount_gate_wait_delay__default is defined else proxmox_lxc_mount_gate_wait_delay | default(omit) }}"
+    proxmox_lxc_mount_gate_snippets_storage: "{{ proxmox_lxc_mount_gate_snippets_storage__default if proxmox_lxc_mount_gate_snippets_storage__default is defined else proxmox_lxc_mount_gate_snippets_storage | default(omit) }}"
+    proxmox_lxc_mount_gate_snippets_dir: "{{ proxmox_lxc_mount_gate_snippets_dir__default if proxmox_lxc_mount_gate_snippets_dir__default is defined else proxmox_lxc_mount_gate_snippets_dir | default(omit) }}"
+    proxmox_lxc_mount_gate_hook_name: "{{ proxmox_lxc_mount_gate_hook_name__default if proxmox_lxc_mount_gate_hook_name__default is defined else proxmox_lxc_mount_gate_hook_name | default(omit) }}"
+    proxmox_lxc_mount_gate_apply: "{{ proxmox_lxc_mount_gate_apply__default if proxmox_lxc_mount_gate_apply__default is defined else proxmox_lxc_mount_gate_apply | default(omit) }}"
+  when: _proxmox_lxc_mount_gate__argspec_resolved | default(false)
+
+- name: Record that this role has resolved its options in this play
+  ansible.builtin.set_fact:
+    _proxmox_lxc_mount_gate__argspec_resolved: true

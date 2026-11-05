@@ -1,0 +1,147 @@
+# Checks what the role wrote, runs the hookscript both ways (refused, allowed), and proves each required option
+# is enforced: the role must FAIL, before writing anything, when one is missing.
+---
+- name: Verify the rendered hookscript
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _scratch: /tmp/molecule-proxmox-lxc-mount-gate
+    # The default hook name derives from the container id.
+    _hook: "{{ _scratch }}/snippets/lxc-mount-gate-4242.sh"
+    # converge's second call: no units before the mount, an explicit file name.
+    _hook_no_units: "{{ _scratch }}/snippets/gate-no-units.sh"
+  tasks:
+    - name: Read the hookscript's mode
+      ansible.builtin.stat:
+        path: "{{ _hook }}"
+      register: _hook_stat
+
+    - name: The hookscript exists and is executable
+      ansible.builtin.assert:
+        that:
+          - _hook_stat.stat.exists
+          - _hook_stat.stat.executable
+        fail_msg: "the hookscript was not written executable at {{ _hook }}"
+
+    - name: The hookscript is valid bash
+      ansible.builtin.command: "bash -n {{ _hook }}"
+      changed_when: false
+
+    - name: Read the hookscript
+      ansible.builtin.slurp:
+        src: "{{ _hook }}"
+      register: _hook_body
+
+    - name: The caller's values are what it carries
+      vars:
+        _lines: "{{ (_hook_body.content | b64decode).splitlines() }}"
+      ansible.builtin.assert:
+        that:
+          - "'MOUNT_PATH=/mnt/media' in _lines"
+          - "'MOUNT_UNIT=mnt-media.mount' in _lines"
+          - "'REQUIRES_UNITS=(iscsid.service iscsi-login@example.service)' in _lines"
+          - "'RETRIES=30' in _lines"
+          - "'SLEEP=5' in _lines"
+          - "'#   hookscript: local:snippets/lxc-mount-gate-4242.sh' in _lines"
+        fail_msg: "the rendered hookscript does not carry the caller's values"
+
+    # The hookscript's logic, run for real against stand-ins for systemctl and mountpoint (a node
+    # cannot be reproduced here, and a missing `mountpoint` binary would otherwise make the refusal
+    # case pass for the wrong reason). The stand-ins log every call; `mountpoint` succeeds only once
+    # a flag file exists, so both directions are exercised.
+    - name: Create the stand-ins directory
+      ansible.builtin.file:
+        path: "{{ _scratch }}/bin"
+        state: directory
+        mode: "0755"
+
+    - name: Write the stand-ins
+      ansible.builtin.copy:
+        dest: "{{ _scratch }}/bin/{{ item.name }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          echo "{{ item.name }} $*" >> "{{ _scratch }}/calls"
+          {{ item.body }}
+      loop:
+        - {name: systemctl, body: "exit 0"}
+        - {name: mountpoint, body: 'test -e "{{ _scratch }}/mounted"'}
+        - {name: sleep, body: "exit 0"}
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Run the pre-start phase, never mounted, then mounted, for both renders
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -u
+          run() {  # <script> <mounted:0|1>
+            rm -f "{{ _scratch }}/calls" "{{ _scratch }}/mounted"
+            [ "$2" = 1 ] && touch "{{ _scratch }}/mounted"
+            out=$(PATH="{{ _scratch }}/bin:$PATH" bash "$1" 4242 pre-start 2>&1); rc=$?
+            echo "RC=$rc"; echo "$out"; echo "--calls--"; cat "{{ _scratch }}/calls"; echo "--end--"
+          }
+          run {{ _hook | quote }} 0
+          run {{ _hook | quote }} 1
+          run {{ _hook_no_units | quote }} 1
+      register: _runs
+      changed_when: false
+
+    - name: Split the runs
+      ansible.builtin.set_fact:
+        _run: "{{ _runs.stdout.split('--end--') | map('trim') | list }}"
+
+    - name: Never mounted — every try made, then the start refused (rc 1)
+      ansible.builtin.assert:
+        that:
+          - "_run[0] is search('^RC=1', multiline=True)"
+          - "'waiting for /mnt/media (attempt 30/30)' in _run[0]"
+          - "'aborting container start' in _run[0]"
+          - "(_run[0] | regex_findall('(?m)^mountpoint -q /mnt/media$') | length) == 31"
+          - >-
+            (_run[0] | regex_findall('(?m)^systemctl start .*$'))[:3]
+            == ['systemctl start iscsid.service', 'systemctl start iscsi-login@example.service',
+                'systemctl start mnt-media.mount']
+        fail_msg: "the never-mounted run did not refuse as expected: {{ _run[0] }}"
+
+    - name: Mounted — the start is allowed (rc 0) after one check
+      ansible.builtin.assert:
+        that:
+          - "_run[1] is search('^RC=0', multiline=True)"
+          - "'OK: /mnt/media is mounted' in _run[1]"
+          - "(_run[1] | regex_findall('(?m)^mountpoint ') | length) == 1"
+        fail_msg: "the mounted run did not allow the start: {{ _run[1] }}"
+
+    - name: No units before the mount (the default) — an empty list runs, under this host's bash
+      ansible.builtin.assert:
+        that:
+          - "'REQUIRES_UNITS=()' in _hook_no_units_text.splitlines()"
+          - "_run[2] is search('^RC=0', multiline=True)"
+          - "(_run[2] | regex_findall('(?m)^systemctl start ') | length) == 1"
+        fail_msg: "the default (no units) render did not run cleanly: {{ _run[2] }}"
+      vars:
+        _hook_no_units_text: "{{ lookup('ansible.builtin.file', _hook_no_units) }}"
+
+    - name: Other phases are a no-op
+      ansible.builtin.command: "bash {{ _hook }} 4242 post-stop"
+      changed_when: false
+
+- name: Verify each required option is enforced
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _scratch: /tmp/molecule-proxmox-lxc-mount-gate
+  tasks:
+    - name: Run the role once per required option, with that option left out
+      ansible.builtin.include_tasks: missing_option.yml
+      loop:
+        - proxmox_lxc_mount_gate_ctid
+        - proxmox_lxc_mount_gate_mount_path
+        - proxmox_lxc_mount_gate_mount_unit
+      loop_control:
+        loop_var: _missing
+
+    - name: Clean up
+      ansible.builtin.file:
+        path: "{{ _scratch }}"
+        state: absent

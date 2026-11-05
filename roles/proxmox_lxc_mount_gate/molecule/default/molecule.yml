@@ -1,0 +1,26 @@
+# Offline scenario. A Proxmox VE node and a late-mounting filesystem cannot be reproduced in CI, so
+# this runs the REAL role on localhost with apply off (it writes the hookscript into a scratch
+# snippets directory and changes nothing else), then checks the rendered hookscript and that the
+# role refuses to run without its required options.
+---
+dependency:
+  name: galaxy
+driver:
+  name: default
+platforms:
+  - name: localhost
+provisioner:
+  name: ansible
+  # Molecule runs from the scenario directory, so a repo ansible.cfg roles_path does not resolve.
+  # Pointed at the roles directory so converge.yml can include the role under test.
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../"
+  inventory:
+    host_vars:
+      localhost:
+        ansible_connection: local
+  playbooks:
+    converge: converge.yml
+    verify: verify.yml
+verifier:
+  name: ansible

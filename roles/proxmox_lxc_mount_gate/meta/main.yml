@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  namespace: richard_lynch
+  author: Richard Lynch
+  description: >-
+    Gate a Proxmox VE container's start on a host mount: a pre-start hookscript starts the units the
+    mount depends on and refuses the start until the path is a real mountpoint, so onboot: 1 is
+    safe for a container whose bind mount comes from a filesystem that mounts late.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  platforms:
+    - name: Debian
+      versions: [bookworm]
+  galaxy_tags: [proxmox, lxc, mount, boot]
+dependencies: []

@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+#
+# Proxmox VE hookscript for container {{ proxmox_lxc_mount_gate_ctid }}, referenced from its config as:
+#   hookscript: {{ _proxmox_lxc_mount_gate_hook_ref }}
+#
+# WHY: the container bind-mounts {{ proxmox_lxc_mount_gate_mount_path }}, a host filesystem that can come up after
+# the node has booted. If the container starts before it is mounted, the bind mount takes the EMPTY
+# directory underneath and everything inside the container runs against nothing.
+#
+# On the `pre-start` phase this starts the units the mount depends on and the mount unit, then
+# waits until {{ proxmox_lxc_mount_gate_mount_path }} is a real mountpoint, retrying while they come up, and
+# REFUSES the container start (non-zero exit) if it never does: fail loud, never start on an empty
+# bind mount. That is what makes `onboot: 1` safe.
+#
+# Proxmox VE calls: <hookscript> <vmid> <phase>   where phase in {pre-start, post-start, pre-stop, post-stop}
+set -euo pipefail
+
+VMID="${1:-}"
+PHASE="${2:-}"
+
+MOUNT_PATH={{ proxmox_lxc_mount_gate_mount_path | quote }}
+MOUNT_UNIT={{ proxmox_lxc_mount_gate_mount_unit | quote }}
+REQUIRES_UNITS=({{ proxmox_lxc_mount_gate_requires_units | map('quote') | join(' ') }})
+RETRIES={{ proxmox_lxc_mount_gate_wait_tries | int }}
+SLEEP={{ proxmox_lxc_mount_gate_wait_delay | int }}
+
+log() { echo "[lxc-mount-gate][${VMID}][${PHASE}] $*"; }
+
+case "${PHASE}" in
+  pre-start)
+    log "ensuring ${MOUNT_PATH} is mounted before the container starts"
+
+    # Start the dependency chain (idempotent: starting an active unit is a no-op).
+    # ${a[@]+"${a[@]}"}: an empty array is "unbound" under `set -u` on bash before 4.4.
+    for unit in ${REQUIRES_UNITS[@]+"${REQUIRES_UNITS[@]}"}; do
+      systemctl start "${unit}" 2>/dev/null || log "warn: ${unit} start returned non-zero (may already be active)"
+    done
+    systemctl start "${MOUNT_UNIT}" 2>/dev/null || log "warn: ${MOUNT_UNIT} start returned non-zero (will retry via mountpoint check)"
+
+    i=0
+    while ! mountpoint -q "${MOUNT_PATH}"; do
+      i=$((i + 1))
+      if [ "${i}" -gt "${RETRIES}" ]; then
+        log "FATAL: ${MOUNT_PATH} still not mounted after $((RETRIES * SLEEP))s — aborting container start rather than bind an empty directory"
+        exit 1
+      fi
+      log "waiting for ${MOUNT_PATH} (attempt ${i}/${RETRIES}) — re-poking ${MOUNT_UNIT}"
+      systemctl start "${MOUNT_UNIT}" 2>/dev/null || true
+      sleep "${SLEEP}"
+    done
+
+    log "OK: ${MOUNT_PATH} is mounted; allowing container start"
+    ;;
+
+  post-start|pre-stop|post-stop)
+    # nothing to do
+    ;;
+
+  *)
+    log "unknown phase '${PHASE}' — ignoring"
+    ;;
+esac
