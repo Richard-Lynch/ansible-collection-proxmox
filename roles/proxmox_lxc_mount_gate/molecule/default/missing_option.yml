@@ -1,0 +1,52 @@
+---
+# One required option left out: the role must fail at argument validation, naming the option, and
+# must not have written a hookscript. One include per option, because a task's `vars:` cannot leave
+# a key out conditionally (`omit` there is a placeholder value, not an absent variable).
+- name: "Run the role without {{ _missing }}"
+  block:
+    - name: Include the role without the container id
+      ansible.builtin.include_role:
+        name: proxmox_lxc_mount_gate
+      vars:
+        proxmox_lxc_mount_gate_mount_path: /mnt/media
+        proxmox_lxc_mount_gate_mount_unit: mnt-media.mount
+        proxmox_lxc_mount_gate_snippets_dir: "{{ _scratch }}/missing"
+      when: _missing == 'proxmox_lxc_mount_gate_ctid'
+
+    - name: Include the role without the mount path
+      ansible.builtin.include_role:
+        name: proxmox_lxc_mount_gate
+      vars:
+        proxmox_lxc_mount_gate_ctid: 4242
+        proxmox_lxc_mount_gate_mount_unit: mnt-media.mount
+        proxmox_lxc_mount_gate_snippets_dir: "{{ _scratch }}/missing"
+      when: _missing == 'proxmox_lxc_mount_gate_mount_path'
+
+    - name: Include the role without the mount unit
+      ansible.builtin.include_role:
+        name: proxmox_lxc_mount_gate
+      vars:
+        proxmox_lxc_mount_gate_ctid: 4242
+        proxmox_lxc_mount_gate_mount_path: /mnt/media
+        proxmox_lxc_mount_gate_snippets_dir: "{{ _scratch }}/missing"
+      when: _missing == 'proxmox_lxc_mount_gate_mount_unit'
+
+    - name: The role ran without a required option
+      ansible.builtin.fail:
+        msg: "proxmox_lxc_mount_gate accepted a call without {{ _missing }}"
+  rescue:
+    - name: "The failure was argument validation, naming {{ _missing }}"
+      ansible.builtin.assert:
+        that:
+          - "('missing required arguments: ' ~ _missing) in (ansible_failed_result.argument_errors | default([]) | join(' '))"
+        fail_msg: "not the argument-validation failure expected: {{ ansible_failed_result.msg | default('(no message)') }}"
+
+    - name: Read the scratch snippets directory
+      ansible.builtin.stat:
+        path: "{{ _scratch }}/missing"
+      register: _missing_dir
+
+    - name: Nothing was written
+      ansible.builtin.assert:
+        that: [not _missing_dir.stat.exists]
+        fail_msg: "the role wrote to {{ _scratch }}/missing before failing"

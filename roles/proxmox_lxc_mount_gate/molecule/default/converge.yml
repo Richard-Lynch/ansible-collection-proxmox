@@ -1,0 +1,32 @@
+# Runs the REAL role (include_role, not a copy of its tasks) with apply off, so the hookscript is
+# rendered from the role's own template and the role's own resolver and guards run. Only the
+# snippets directory is redirected to a scratch path (verify.yml removes it at the end), and a second
+# converge must change nothing (molecule's idempotence step).
+---
+- name: Converge (apply off)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _scratch: /tmp/molecule-proxmox-lxc-mount-gate
+  tasks:
+    - name: Run the role with every required option and two units before the mount
+      ansible.builtin.include_role:
+        name: proxmox_lxc_mount_gate
+      vars:
+        proxmox_lxc_mount_gate_ctid: 4242
+        proxmox_lxc_mount_gate_mount_path: /mnt/media
+        proxmox_lxc_mount_gate_mount_unit: mnt-media.mount
+        proxmox_lxc_mount_gate_requires_units:
+          - iscsid.service
+          - iscsi-login@example.service
+        proxmox_lxc_mount_gate_snippets_dir: "{{ _scratch }}/snippets"
+
+    - name: Run it again for a second container, with the defaults (no units before the mount)
+      ansible.builtin.include_role:
+        name: proxmox_lxc_mount_gate
+      vars:
+        proxmox_lxc_mount_gate_ctid: 4243
+        proxmox_lxc_mount_gate_mount_path: /mnt/media
+        proxmox_lxc_mount_gate_mount_unit: mnt-media.mount
+        proxmox_lxc_mount_gate_hook_name: gate-no-units.sh
+        proxmox_lxc_mount_gate_snippets_dir: "{{ _scratch }}/snippets"

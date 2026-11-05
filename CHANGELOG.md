@@ -9,6 +9,16 @@ All notable changes to this collection are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the collection
 uses [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] — 2026-11-05
+
+### Added
+
+- Role `proxmox_lxc_mount_gate`: gates a container's start on a host mount with a pre-start hookscript that starts the units the mount depends on and refuses the start until the path is a real mountpoint, so `onboot: 1` is safe for a container whose bind mount comes from a filesystem that mounts late. Report-only by default; with apply it enables the units, wires the hookscript into the container config and sets `onboot: 1`. The guest, the path and the units are required options with no default.
+
+### Changed
+
+- CI, disclosure and release workflows call ansible-devkit v0.4.1.
+
 ## [1.0.0] — 2026-11-03
 
 ### Added

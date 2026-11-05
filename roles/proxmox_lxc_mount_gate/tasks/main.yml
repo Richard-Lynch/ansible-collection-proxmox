@@ -1,0 +1,83 @@
+---
+# proxmox_lxc_mount_gate — gate a Proxmox VE container's start on a host mount.
+#
+# THE RACE. A container whose bind mount's SOURCE is a host filesystem that comes up late (a network
+# block device, an iSCSI LUN served by a guest on the same node) can start before that filesystem is
+# mounted. It then bind-mounts the EMPTY directory underneath, and everything inside the container
+# runs against nothing — no error anywhere. Leaving the container at `onboot: 0` avoids the race by
+# making every boot a manual start.
+#
+# THE GATE. A pre-start hookscript: Proxmox VE runs it with `<vmid> pre-start` before the container
+# starts, and a non-zero exit refuses the start. It starts the units the mount depends on, then the
+# mount unit, and waits until the path is a real mountpoint, refusing the start if it never becomes
+# one. With that in place `onboot: 1` is safe.
+#
+# GENERATE-DON'T-APPLY. With proxmox_lxc_mount_gate_apply false (the default) the role writes the
+# hookscript into the snippets directory and reports what apply would change; how the host boots is
+# not changed. With apply it enables and starts the units, fails if the path is not then mounted,
+# wires the hookscript into the container config and sets `onboot: 1`. It never starts, stops or
+# reboots the container.
+
+- name: Resolve declared options over their generated defaults
+  ansible.builtin.include_tasks: _resolve_defaults.yml
+
+- name: Check the constraints the argument spec cannot enforce
+  ansible.builtin.include_tasks: _argspec_guards.yml
+
+- name: Derive the hookscript reference and the container config path
+  ansible.builtin.include_tasks: setup_vars.yml
+
+- name: Ensure the snippets directory exists
+  ansible.builtin.file:
+    path: "{{ proxmox_lxc_mount_gate_snippets_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Write the pre-start hookscript
+  ansible.builtin.template:
+    src: lxc-mount-gate-hook.sh.j2
+    dest: "{{ proxmox_lxc_mount_gate_snippets_dir }}/{{ _proxmox_lxc_mount_gate_hook_file }}"
+    mode: "0755"
+
+- name: Report what apply would change
+  ansible.builtin.debug:
+    msg:
+      - "proxmox_lxc_mount_gate_apply={{ proxmox_lxc_mount_gate_apply }} (false = hookscript only, no change to boot)"
+      - "would enable+start: {{ (proxmox_lxc_mount_gate_requires_units + [proxmox_lxc_mount_gate_mount_unit]) | join(', ') }}"
+      - "would set hookscript: {{ _proxmox_lxc_mount_gate_hook_ref }} on {{ _proxmox_lxc_mount_gate_ct_conf }}"
+      - "would set: onboot: 1 on {{ _proxmox_lxc_mount_gate_ct_conf }}"
+  when: not (proxmox_lxc_mount_gate_apply | bool)
+
+- name: Apply the boot ordering
+  when: proxmox_lxc_mount_gate_apply | bool
+  block:
+    - name: Enable and start the units the mount depends on
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop: "{{ proxmox_lxc_mount_gate_requires_units }}"
+
+    - name: Enable and start the mount unit
+      ansible.builtin.systemd:
+        name: "{{ proxmox_lxc_mount_gate_mount_unit }}"
+        enabled: true
+        state: started
+
+    - name: Fail if the path is not a mountpoint now
+      ansible.builtin.command: "mountpoint -q {{ proxmox_lxc_mount_gate_mount_path }}"
+      changed_when: false
+
+    - name: Wire the hookscript into the container config
+      ansible.builtin.lineinfile:
+        path: "{{ _proxmox_lxc_mount_gate_ct_conf }}"
+        regexp: "^hookscript:"
+        line: "hookscript: {{ _proxmox_lxc_mount_gate_hook_ref }}"
+        create: false
+
+    - name: Set onboot 1 on the container (safe now that the hookscript gates on the mount)
+      ansible.builtin.lineinfile:
+        path: "{{ _proxmox_lxc_mount_gate_ct_conf }}"
+        regexp: "^onboot:"
+        line: "onboot: 1"
+        create: false

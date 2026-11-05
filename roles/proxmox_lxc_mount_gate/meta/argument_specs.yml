@@ -1,0 +1,85 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/proxmox_lxc_mount_gate/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate proxmox_lxc_mount_gate
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Gate a Proxmox LXC's start on a host mount with a pre-start hookscript
+    description:
+      - Stages a Proxmox VE hookscript that, in the pre-start phase, starts the units
+      - a host mount depends on and refuses the container start until the mount path
+      - is a real mountpoint. With apply, also enables and starts those units, wires the
+      - 'hookscript into the container config and sets onboot: 1.'
+    version_added: '1.1'
+    author: Collection maintainers
+    options:
+      proxmox_lxc_mount_gate_ctid:
+        description:
+          - The Proxmox VE id of the container whose start is gated.
+        type: int
+        required: true
+      proxmox_lxc_mount_gate_mount_path:
+        description:
+          - Absolute host path that must be a mountpoint before the container may
+          - start (the source of the container's bind mount).
+        type: str
+        required: true
+      proxmox_lxc_mount_gate_mount_unit:
+        description:
+          - The systemd mount unit for the mount path. The hookscript starts it, and
+          - starts it again on each wait, until the path is mounted.
+        type: str
+        required: true
+      proxmox_lxc_mount_gate_requires_units:
+        description:
+          - Units started, in this order, before the mount unit (for example an
+          - iSCSI login service). With apply they are also enabled and started.
+        type: list
+        required: false
+        default: []
+        elements: str
+      proxmox_lxc_mount_gate_wait_tries:
+        description:
+          - How many times the hookscript checks the mount before refusing the start.
+        type: int
+        required: false
+        default: 30
+      proxmox_lxc_mount_gate_wait_delay:
+        description:
+          - Seconds between the hookscript's checks.
+        type: int
+        required: false
+        default: 5
+      proxmox_lxc_mount_gate_snippets_storage:
+        description:
+          - The Proxmox VE storage whose snippets the container config references.
+        type: str
+        required: false
+        default: local
+      proxmox_lxc_mount_gate_snippets_dir:
+        description:
+          - The host directory of that storage's snippets, where the hookscript is written.
+        type: str
+        required: false
+        default: /var/lib/vz/snippets
+      proxmox_lxc_mount_gate_hook_name:
+        description:
+          - File name of the hookscript in the snippets directory. Empty means
+          - lxc-mount-gate-<ctid>.sh.
+        type: str
+        required: false
+        default: ''
+      proxmox_lxc_mount_gate_apply:
+        description:
+          - Safety gate. false (default) stages the hookscript and reports what apply
+          - would change, with no change to how the host boots. true enables and
+          - starts the units, fails if the path is not then mounted, wires the
+          - 'hookscript into the container config and sets onboot: 1.'
+        type: bool
+        required: false
+        default: false
