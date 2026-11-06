@@ -9,6 +9,12 @@ All notable changes to this collection are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the collection
 uses [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] — 2026-11-06
+
+### Changed
+
+- `proxmox_ci_access` no longer prints a newly created API token's secret. The `pveum` call that creates the token is `no_log` (its output is the secret), and the secret is written once, mode 0600, to a new option `proxmox_ci_access_secret_dest` on the controller; the role prints only that path. A run that would create the token stops first when `proxmox_ci_access_secret_dest` is unset. Re-runs against an existing token are unchanged. Migrating: set `proxmox_ci_access_secret_dest` where a play may create the token.
+
 ## [1.1.0] — 2026-11-05
 
 ### Added
