@@ -29,16 +29,20 @@ required: they are the caller's to choose.
         proxmox_ci_access_user: ci-staging@pve
         proxmox_ci_access_role: CIStaging
         proxmox_ci_access_token: staging
-        proxmox_ci_access_secret_name: <your secret store item>   # named in the one-time message
+        proxmox_ci_access_secret_name: <your secret store item>   # named in the creation message
+        proxmox_ci_access_secret_dest: /path/on/the/controller/ci-token   # written 0600 on creation
 ```
 
-On **first** creation the role prints the token secret **once** — store it in your secret manager
-immediately. The secret cannot be retrieved later.
+On **first** creation the role writes the token secret **once** to `proxmox_ci_access_secret_dest`
+on the controller (mode 0600) and prints only that path. Store the secret in your secret manager
+immediately and delete the file; it cannot be retrieved from Proxmox later. The secret is never
+printed, because a task's output is recorded by whatever records the run. A run that would create
+the token without `proxmox_ci_access_secret_dest` set stops before creating it.
 
 ## Rotation
 
 Re-runs are no-ops. To rotate the token: `pveum user token remove <user> <token>` then re-run this
-role (it recreates + reprints). This makes the credential regeneratable from the role alone.
+role (it recreates the token and writes the new secret to `proxmox_ci_access_secret_dest`). This makes the credential regeneratable from the role alone.
 
 ## Testing
 

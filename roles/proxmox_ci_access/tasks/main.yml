@@ -1,8 +1,9 @@
 ---
 # proxmox_ci_access — idempotently create the CI user, its role, ACLs, and its API token.
 # Runs `pveum` on a PVE node (community.proxmox has no role/token module). Every command is guarded
-# so re-runs are no-ops. The token secret is emitted ONCE on first creation for the caller to store
-# in its secret manager; it is never written to disk by this role.
+# so re-runs are no-ops. On first creation the token secret is written ONCE to a 0600 file on the
+# controller (proxmox_ci_access_secret_dest) for the caller to store in its secret manager. It is
+# never printed: a task's output is recorded by whatever records the run.
 
 - name: Create the CI role with the least-privilege priv set
   ansible.builtin.command:
@@ -46,6 +47,39 @@
   register: _token_list
   changed_when: false
 
+- name: HARD GATE — a new token needs somewhere to put its secret
+  ansible.builtin.assert:
+    that:
+      - proxmox_ci_access_secret_dest | length > 0
+    fail_msg: >-
+      Token {{ proxmox_ci_access_user }}!{{ proxmox_ci_access_token }} does not exist yet, and its
+      secret can be read only once, at creation. Set proxmox_ci_access_secret_dest to a controller
+      path (written 0600) to receive it; the role never prints it.
+    quiet: true
+  when: "proxmox_ci_access_token not in (_token_list.stdout | default('[]'))"
+
+- name: Prepare the file the new token's secret goes into (before the irreversible create)
+  # The secret can be read only once, at creation, so the destination must be writable BEFORE the
+  # token exists: a copy that failed afterwards would lose it. Creates the parent directory 0700
+  # and the file itself 0600 (empty until the create succeeds).
+  when: "proxmox_ci_access_token not in (_token_list.stdout | default('[]'))"
+  delegate_to: localhost
+  become: false
+  block:
+    - name: Ensure the secret's directory exists on the controller
+      ansible.builtin.file:
+        path: "{{ proxmox_ci_access_secret_dest | dirname }}"
+        state: directory
+        mode: "0700"
+
+    - name: Create the secret file, 0600
+      ansible.builtin.file:
+        path: "{{ proxmox_ci_access_secret_dest }}"
+        state: touch
+        mode: "0600"
+        modification_time: preserve
+        access_time: preserve
+
 - name: Create the CI token (privsep) if absent
   ansible.builtin.command:
     cmd: >-
@@ -53,7 +87,29 @@
       --privsep {{ proxmox_ci_access_token_privsep }} --output-format json
   register: _token_add
   when: "proxmox_ci_access_token not in (_token_list.stdout | default('[]'))"
-  changed_when: _token_add is not skipped
+  changed_when: (_token_add.rc | default(1)) == 0
+  failed_when: false
+  no_log: true  # stdout IS the new token secret
+
+- name: HARD GATE — the token was created
+  ansible.builtin.assert:
+    that:
+      - _token_add.rc == 0
+    fail_msg: >-
+      pveum user token add failed (rc {{ _token_add.rc }}): {{ _token_add.stderr | default('') }}
+    quiet: true
+  when: _token_add is not skipped
+
+- name: Write the new token secret to the controller, 0600
+  ansible.builtin.copy:
+    content: "{{ (_token_add.stdout | from_json).value }}\n"
+    dest: "{{ proxmox_ci_access_secret_dest }}"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  no_log: true
+  diff: false
+  when: _token_add is not skipped
 
 - name: Grant the role to the TOKEN as well (privsep tokens have their own privileges)
   community.proxmox.proxmox_access_acl:
@@ -68,10 +124,11 @@
     state: present
   when: proxmox_ci_access_token_privsep | int == 1
 
-- name: Emit the token secret ONCE (store it now — it cannot be retrieved later)
+- name: Say where the new token secret is (never the secret itself)
   ansible.builtin.debug:
     msg: >-
-      NEW {{ proxmox_ci_access_user }}!{{ proxmox_ci_access_token }} token created. STORE THIS
-      {{ ('as ' ~ proxmox_ci_access_secret_name ~ ' ') if proxmox_ci_access_secret_name | length > 0 else '' }}NOW
-      (secret shown once): {{ (_token_add.stdout | from_json).value }}
-  when: _token_add is not skipped and _token_add.stdout is defined
+      NEW {{ proxmox_ci_access_user }}!{{ proxmox_ci_access_token }} token created. Its secret is in
+      {{ proxmox_ci_access_secret_dest }} (0600, on the controller): store it
+      {{ ('as ' ~ proxmox_ci_access_secret_name ~ ' ') if proxmox_ci_access_secret_name | length > 0 else '' }}NOW,
+      then delete the file. It cannot be retrieved from Proxmox later.
+  when: _token_add is not skipped

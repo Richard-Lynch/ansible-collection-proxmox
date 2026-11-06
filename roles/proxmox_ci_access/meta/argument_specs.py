@@ -70,7 +70,17 @@ argument_specs = ArgumentSpecs(
                     default="",
                     description=[
                         "Where the caller stores the new token secret (a secret-manager item name).",
-                        "Only named in the one-time message printed when the token is created.",
+                        "Only named in the message printed when the token is created.",
+                    ],
+                ),
+                "proxmox_ci_access_secret_dest": OptionSpec(
+                    type="str",
+                    required=False,
+                    default="",
+                    description=[
+                        "Controller path the NEW token's secret is written to (mode 0600) when the",
+                        "role creates the token. Required only on a run that creates it; the secret",
+                        "is never printed. Store it in the secret manager, then delete the file.",
                     ],
                 ),
             },

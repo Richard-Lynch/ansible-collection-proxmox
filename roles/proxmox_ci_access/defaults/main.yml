@@ -1,7 +1,8 @@
 ---
 # proxmox_ci_access — create a least-privilege PVE user + role + API token for CI.
-# Runs pveum on a PVE node (idempotent). The token secret is captured and must be stored by the
-# caller in its secret manager — this role prints it once on first creation and never persists it.
+# Runs pveum on a PVE node (idempotent). On first creation the token secret is written once to
+# proxmox_ci_access_secret_dest on the controller (0600) for the caller to store in its secret
+# manager; it is never printed.
 
 # proxmox_ci_access_user / _role / _token (REQUIRED, no default): the identity's names are the
 # caller's to choose; the token id is <user>!<token>.
@@ -30,5 +31,8 @@ proxmox_ci_access_acl_path: "/"
 # privsep=1 → the token has its OWN privileges (not the user's) — must ACL the token too.
 proxmox_ci_access_token_privsep: 1
 
-# Secret-manager item the caller stores the token in; only named in the one-time message.
+# Secret-manager item the caller stores the token in; only named in the creation message.
 proxmox_ci_access_secret_name: ""
+
+# Controller path the NEW token's secret is written to (0600). Required on a run that creates it.
+proxmox_ci_access_secret_dest: ""
