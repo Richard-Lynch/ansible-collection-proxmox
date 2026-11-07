@@ -10,6 +10,7 @@
 .python-version
 CHANGELOG.md
 LICENSE
+Makefile
 README.md
 ci/affected-scenarios.sh
 configured_roles.txt
@@ -24,6 +25,7 @@ plugins/filter/dpl_lxc_update_netif.yml
 plugins/filter/get_best_proxmox_ip.py
 plugins/filter/lxc_config_drift.py
 renovate.json
+requirements.yml
 roles/deployment_proxmox_lxc/README.md
 roles/deployment_proxmox_lxc/defaults/main.yml
 roles/deployment_proxmox_lxc/meta/argument_specs.py
