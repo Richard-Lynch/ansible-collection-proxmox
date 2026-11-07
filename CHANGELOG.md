@@ -9,6 +9,17 @@ All notable changes to this collection are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the collection
 uses [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] — 2026-11-07
+
+### Added
+
+- **`get_best_proxmox_ip` filter** — the address to reach a guest by, from the API inventory's
+  facts (LXC: `proxmox_lxc_interfaces` then `proxmox_net0`; QEMU: the agent's interfaces then
+  `proxmox_ipconfig0`), gated by a REQUIRED `subnet` (estate data, from inventory; the hub's copy
+  defaulted it). Moved from the IaaC hub's `my.utils` (M6 batch 5) and re-validated without
+  `ansible.utils`, so the collection takes no new dependency. Unit tests for
+  the order per guest type, the subnet gate and the refusals.
+
 ## [1.2.0] — 2026-11-06
 
 ### Changed
