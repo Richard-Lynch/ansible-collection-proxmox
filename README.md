@@ -67,3 +67,10 @@ the same commit as any file added or removed.
 ## Licence
 
 GPL-3.0-or-later. See [LICENSE](LICENSE).
+
+## Filters
+
+| Filter | Description |
+| ------ | ----------- |
+| `get_best_proxmox_ip` | The address to reach a guest by, from the API inventory's `proxmox_*` facts, inside a subnet |
+| `lxc_config_drift` | Compare a guest's desired LXC config with the live one |

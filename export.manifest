@@ -21,6 +21,7 @@ plugins/filter/dpl_lxc_config_drift.yml
 plugins/filter/dpl_lxc_drift_needs_restart.yml
 plugins/filter/dpl_lxc_netif_with_live_hwaddr.yml
 plugins/filter/dpl_lxc_update_netif.yml
+plugins/filter/get_best_proxmox_ip.py
 plugins/filter/lxc_config_drift.py
 renovate.json
 roles/deployment_proxmox_lxc/README.md
@@ -253,4 +254,5 @@ roles/vm_truenas/vars/main.yml
 tests/sanity/ignore-2.19.txt
 tests/sanity/ignore-2.20.txt
 tests/sanity/ignore-2.21.txt
+tests/unit/test_get_best_proxmox_ip.py
 tests/unit/test_lxc_config_drift.py
